@@ -188,6 +188,17 @@ canvas {
     margin-bottom: 8px;
 }
 
+.mobile-url {
+    font-size: 11px;
+    color: #d8efff;
+    margin-bottom: 8px;
+    border: 1px solid rgba(151, 206, 244, 0.34);
+    border-radius: 8px;
+    background: rgba(15, 37, 56, 0.42);
+    padding: 4px 8px;
+    word-break: break-all;
+}
+
 #active-input-label {
     font-weight: 700;
     color: #dff5ff;

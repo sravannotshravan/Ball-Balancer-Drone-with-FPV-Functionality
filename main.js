@@ -81,6 +81,9 @@ const ENV_MODE_MOUNTAIN = 'mountain';
 const OBSTACLE_COLLISION_PADDING = 0.05;
 const FRONT_SENSOR_MAX_RANGE = 120;
 
+const currentPage = window.location.pathname.toLowerCase();
+const isMobileFrontView = currentPage.endsWith('/mobile.html') || currentPage.endsWith('mobile.html');
+
 function createCorrectionArrow() {
     const indicator = new THREE.Group();
 
@@ -499,6 +502,7 @@ const trayPos = new CANNON.Vec3();
 const cameraOffset = new THREE.Vector3(0, 3.8, 7.5);
 const cameraTargetPos = new THREE.Vector3();
 const telemetry = {
+    mobileUrl: document.getElementById('tm-mobile-url'),
     mode: document.getElementById('tm-mode'),
     assisted: document.getElementById('tm-assisted'),
     environment: document.getElementById('tm-env'),
@@ -519,6 +523,7 @@ const resetButton = document.getElementById('reset-btn');
 const debugHud = document.getElementById('debug-hud');
 const gameHud = document.getElementById('game-hud');
 const miniCamFrame = document.getElementById('mini-cam-frame');
+const mobileViewUrl = document.getElementById('mobile-view-url');
 const compass = document.getElementById('compass');
 const compassTape = document.getElementById('compass-tape');
 const compassHeading = document.getElementById('compass-heading');
@@ -620,6 +625,90 @@ function getFrontObstacleDistance() {
     return nearest;
 }
 
+function isPrivateIpv4(ip) {
+    return /^10\./.test(ip) || /^192\.168\./.test(ip) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(ip);
+}
+
+async function detectLanIpv4() {
+    if (!window.RTCPeerConnection) {
+        return null;
+    }
+
+    return new Promise((resolve) => {
+        const peer = new RTCPeerConnection({ iceServers: [] });
+        const found = new Set();
+        let settled = false;
+
+        function settle(value) {
+            if (!settled) {
+                settled = true;
+                try {
+                    peer.close();
+                } catch {
+                    // no-op
+                }
+                resolve(value);
+            }
+        }
+
+        peer.createDataChannel('lan-ip-discovery');
+
+        peer.onicecandidate = (event) => {
+            const candidate = event.candidate?.candidate;
+            if (!candidate) {
+                const lan = Array.from(found).find(isPrivateIpv4) ?? null;
+                settle(lan);
+                return;
+            }
+
+            const match = candidate.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+            if (match) {
+                found.add(match[1]);
+                if (isPrivateIpv4(match[1])) {
+                    settle(match[1]);
+                }
+            }
+        };
+
+        peer.createOffer()
+            .then((offer) => peer.setLocalDescription(offer))
+            .catch(() => settle(null));
+
+        setTimeout(() => {
+            const lan = Array.from(found).find(isPrivateIpv4) ?? null;
+            settle(lan);
+        }, 1400);
+    });
+}
+
+async function updateMobileViewAddressDisplay() {
+    if (isMobileFrontView) {
+        return;
+    }
+
+    const currentPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+    const hostname = window.location.hostname;
+    let urlText = '';
+
+    if (hostname && hostname !== 'localhost' && hostname !== '127.0.0.1') {
+        urlText = `${window.location.protocol}//${hostname}:${currentPort}/mobile.html`;
+    } else {
+        const lanIp = await detectLanIpv4();
+        if (lanIp) {
+            urlText = `${window.location.protocol}//${lanIp}:${currentPort}/mobile.html`;
+        } else {
+            urlText = `Open using your PC LAN IP on port ${currentPort}: /mobile.html`;
+        }
+    }
+
+    if (mobileViewUrl) {
+        mobileViewUrl.textContent = `Mobile View: ${urlText}`;
+    }
+    if (telemetry.mobileUrl) {
+        telemetry.mobileUrl.textContent = urlText;
+    }
+}
+
 function normalizeHeading(degrees) {
     return ((degrees % 360) + 360) % 360;
 }
@@ -706,6 +795,7 @@ function toggleEnvironmentMode() {
 }
 
 applyEnvironmentMode();
+updateMobileViewAddressDisplay();
 
 function updateBallLocalState() {
     trayToWorldQuat.set(
@@ -1403,10 +1493,9 @@ function handleGamepadToggles() {
 }
 
 function updateTrayBody() {
-    const desiredY = THREE.MathUtils.clamp(
+    const desiredY = Math.max(
         trayBody.position.y + movement.y * FIXED_TIME_STEP,
-        MIN_ALTITUDE + TRAY_OFFSET_Y,
-        MAX_ALTITUDE + TRAY_OFFSET_Y
+        MIN_ALTITUDE + TRAY_OFFSET_Y
     );
     const clampedYDelta = THREE.MathUtils.clamp(
         desiredY - trayBody.position.y,
@@ -1554,8 +1643,14 @@ function animate() {
     updateCamera();
     updateTelemetry();
 
-    renderer.render(scene, camera);
-    renderMiniCameraView();
+    if (isMobileFrontView) {
+        droneFrontCamera.aspect = window.innerWidth / window.innerHeight;
+        droneFrontCamera.updateProjectionMatrix();
+        renderer.render(scene, droneFrontCamera);
+    } else {
+        renderer.render(scene, camera);
+        renderMiniCameraView();
+    }
 }
 
 animate();
@@ -1563,6 +1658,10 @@ animate();
 window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
+    if (isMobileFrontView) {
+        droneFrontCamera.aspect = window.innerWidth / window.innerHeight;
+        droneFrontCamera.updateProjectionMatrix();
+    }
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
