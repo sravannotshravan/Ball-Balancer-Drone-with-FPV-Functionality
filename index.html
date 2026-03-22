@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Ball Balance</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="hud">
+        <section class="panel">
+            <h2>Controls</h2>
+            <ul>
+                <li>W / A / S / D: Move drone</li>
+                <li>Arrow Keys: Tilt tray</li>
+                <li>Gamepad Left Stick: Move</li>
+                <li>Gamepad Right Stick: Tilt</li>
+                <li>B: Toggle auto-balance</li>
+            </ul>
+        </section>
+        <section class="panel telemetry">
+            <h2>Telemetry</h2>
+            <div class="row"><span>Mode</span><span id="tm-mode">MANUAL</span></div>
+            <div class="row"><span>Altitude</span><span id="tm-altitude">0.00 m</span></div>
+            <div class="row"><span>Speed</span><span id="tm-speed">0.00 m/s</span></div>
+            <div class="row"><span>Pitch</span><span id="tm-pitch">0.0°</span></div>
+            <div class="row"><span>Roll</span><span id="tm-roll">0.0°</span></div>
+            <div class="row"><span>Yaw</span><span id="tm-yaw">0.0°</span></div>
+        </section>
+    </div>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "cannon-es": "https://unpkg.com/cannon-es@0.20.0/dist/cannon-es.js"
+            }
+        }
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>
