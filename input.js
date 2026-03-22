@@ -1,9 +1,13 @@
 export const input = {
     moveX: 0,
     moveZ: 0,
-    tiltX: 0,
-    tiltZ: 0,
+    roll: 0,
+    pitch: 0,
+    yaw: 0,
+    throttle: 0,
 };
+
+export let activeInputSource = 'keyboard';
 
 const keyState = {
     KeyW: false,
@@ -32,24 +36,24 @@ function clampInput(value) {
 function getKeyboardAxes() {
     const moveX = (keyState.KeyD ? 1 : 0) - (keyState.KeyA ? 1 : 0);
     const moveZ = (keyState.KeyS ? 1 : 0) - (keyState.KeyW ? 1 : 0);
-    const tiltX = (keyState.ArrowRight ? 1 : 0) - (keyState.ArrowLeft ? 1 : 0);
-    const tiltZ = (keyState.ArrowDown ? 1 : 0) - (keyState.ArrowUp ? 1 : 0);
+    const roll = (keyState.ArrowRight ? 1 : 0) - (keyState.ArrowLeft ? 1 : 0);
+    const pitch = (keyState.ArrowUp ? 1 : 0) - (keyState.ArrowDown ? 1 : 0);
 
-    return { moveX, moveZ, tiltX, tiltZ };
+    return { moveX, moveZ, roll, pitch };
 }
 
 function getGamepadAxes() {
     const gamepad = navigator.getGamepads?.()[0];
 
     if (!gamepad) {
-        return { moveX: 0, moveZ: 0, tiltX: 0, tiltZ: 0 };
+        return { yaw: 0, throttle: 0, roll: 0, pitch: 0 };
     }
 
     return {
-        moveX: applyDeadzone(gamepad.axes[0] ?? 0),
-        moveZ: applyDeadzone(gamepad.axes[1] ?? 0),
-        tiltX: applyDeadzone(gamepad.axes[2] ?? 0),
-        tiltZ: applyDeadzone(gamepad.axes[3] ?? 0),
+        yaw: applyDeadzone(gamepad.axes[0] ?? 0),
+        throttle: applyDeadzone(-(gamepad.axes[1] ?? 0)),
+        roll: applyDeadzone(gamepad.axes[2] ?? 0),
+        pitch: applyDeadzone(-(gamepad.axes[3] ?? 0)),
     };
 }
 
@@ -57,15 +61,36 @@ function recomputeUnifiedInput() {
     const keyboard = getKeyboardAxes();
     const gamepad = getGamepadAxes();
 
-    input.moveX = clampInput(keyboard.moveX + gamepad.moveX);
-    input.moveZ = clampInput(keyboard.moveZ + gamepad.moveZ);
-    input.tiltX = clampInput(keyboard.tiltX + gamepad.tiltX);
-    input.tiltZ = clampInput(keyboard.tiltZ + gamepad.tiltZ);
+    const keyboardActive =
+        keyboard.moveX !== 0 ||
+        keyboard.moveZ !== 0 ||
+        keyboard.roll !== 0 ||
+        keyboard.pitch !== 0;
+
+    const gamepadActive =
+        Math.abs(gamepad.yaw) > 0 ||
+        Math.abs(gamepad.throttle) > 0 ||
+        Math.abs(gamepad.roll) > 0 ||
+        Math.abs(gamepad.pitch) > 0;
+
+    if (gamepadActive) {
+        activeInputSource = 'gamepad';
+    } else if (keyboardActive) {
+        activeInputSource = 'keyboard';
+    }
+
+    input.moveX = clampInput(keyboard.moveX);
+    input.moveZ = clampInput(keyboard.moveZ);
+    input.roll = clampInput(keyboard.roll + gamepad.roll);
+    input.pitch = clampInput(keyboard.pitch + gamepad.pitch);
+    input.yaw = clampInput(gamepad.yaw);
+    input.throttle = clampInput(gamepad.throttle);
 }
 
 window.addEventListener('keydown', (event) => {
     if (event.code in keyState) {
         keyState[event.code] = true;
+        activeInputSource = 'keyboard';
     }
 });
 
