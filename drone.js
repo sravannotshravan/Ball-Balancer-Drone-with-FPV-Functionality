@@ -9,9 +9,23 @@ export function createDrone() {
     const motorMaterial = new THREE.MeshStandardMaterial({ color: 0x1f1f25 });
     const rotorMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff99 });
     const trayMaterial = new THREE.MeshStandardMaterial({ color: 0x5e6470 });
+    const cameraBodyMaterial = new THREE.MeshStandardMaterial({ color: 0x171a20 });
+    const cameraLensMaterial = new THREE.MeshStandardMaterial({ color: 0x87d9ff, emissive: 0x1d4860, emissiveIntensity: 0.8 });
 
     const body = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.22, 0.6), bodyMaterial);
     drone.add(body);
+
+    const frontCameraMount = new THREE.Group();
+    frontCameraMount.position.set(0, 0.08, -0.34);
+    drone.add(frontCameraMount);
+
+    const frontCameraBody = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.11, 0.11), cameraBodyMaterial);
+    frontCameraMount.add(frontCameraBody);
+
+    const frontCameraLens = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.06, 18), cameraLensMaterial);
+    frontCameraLens.rotation.x = Math.PI * 0.5;
+    frontCameraLens.position.z = -0.08;
+    frontCameraMount.add(frontCameraLens);
 
     const trayGroup = new THREE.Group();
     trayGroup.position.y = 0.22;

@@ -9,6 +9,35 @@ canvas {
     display: block;
 }
 
+#mini-cam-frame {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    width: 280px;
+    height: 158px;
+    border: 2px solid rgba(255, 255, 255, 0.7);
+    border-radius: 10px;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+    background: rgba(0, 0, 0, 0.2);
+    pointer-events: none;
+    z-index: 18;
+    overflow: hidden;
+}
+
+.mini-cam-label {
+    position: absolute;
+    left: 8px;
+    top: 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.9px;
+    color: #f7f9fb;
+    background: rgba(0, 0, 0, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 999px;
+    padding: 2px 8px;
+}
+
 .hidden {
     display: none !important;
 }
