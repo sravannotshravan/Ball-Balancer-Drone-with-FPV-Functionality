@@ -746,6 +746,7 @@ const keyboardGlyphs = document.getElementById('keyboard-glyphs');
 const gamepadGlyphs = document.getElementById('gamepad-glyphs');
 const activeInputLabel = document.getElementById('active-input-label');
 const fpvDivider = document.getElementById('fpv-divider');
+const vrMask = document.getElementById('vr-mask');
 const gameTelemetry = {
     mode: document.getElementById('gh-mode'),
     assisted: document.getElementById('gh-assisted'),
@@ -1025,10 +1026,17 @@ function toggleMobileStereoFpv() {
     if (fpvDivider) {
         fpvDivider.classList.toggle('hidden', !mobileStereoFpvEnabled);
     }
+
+    if (vrMask) {
+        vrMask.classList.toggle('hidden', !mobileStereoFpvEnabled);
+    }
 }
 
 if (isMobileFrontView) {
     document.body.classList.toggle('stereo-fpv', mobileStereoFpvEnabled);
+    if (vrMask) {
+        vrMask.classList.toggle('hidden', !mobileStereoFpvEnabled);
+    }
     window.addEventListener('dblclick', toggleMobileStereoFpv);
     window.addEventListener('touchend', () => {
         const now = performance.now();
