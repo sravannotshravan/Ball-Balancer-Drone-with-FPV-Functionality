@@ -1278,8 +1278,8 @@ function updateMovementState() {
     const commandYaw = movement.yaw + targetMovement.yawRate * FIXED_TIME_STEP;
     const cosYaw = Math.cos(commandYaw);
     const sinYaw = Math.sin(commandYaw);
-    targetMovement.x = (rightCommand * cosYaw + forwardCommand * sinYaw) * safetyScale;
-    targetMovement.z = (rightCommand * sinYaw - forwardCommand * cosYaw) * safetyScale;
+    targetMovement.x = (rightCommand * cosYaw - forwardCommand * sinYaw) * safetyScale;
+    targetMovement.z = (-rightCommand * sinYaw - forwardCommand * cosYaw) * safetyScale;
 
     if (assistedMode && pilotPlanarNeutral && inCenterRegion) {
         targetMovement.x = 0;
