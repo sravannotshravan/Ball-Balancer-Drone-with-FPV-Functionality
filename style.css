@@ -219,6 +219,68 @@ canvas {
     background: rgba(32, 72, 104, 0.35);
 }
 
+#fpv-divider {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 4px;
+    transform: translateX(-50%);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.1));
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.35);
+    pointer-events: none;
+    z-index: 24;
+}
+
+body.stereo-fpv #compass {
+    top: 8px;
+    width: min(60vw, 420px);
+    height: 62px;
+}
+
+body.stereo-fpv #compass-heading {
+    top: 38px;
+    font-size: 15px;
+    min-width: 60px;
+    padding: 2px 6px 2px;
+}
+
+body.stereo-fpv #game-telemetry {
+    top: 8px;
+    left: 8px;
+    min-width: 0;
+    max-width: 42vw;
+    padding: 8px 10px;
+    transform: scale(0.78);
+    transform-origin: top left;
+}
+
+body.stereo-fpv #control-glyphs {
+    bottom: 8px;
+    min-width: 0;
+    max-width: 46vw;
+    padding: 8px 10px;
+    transform: translateX(-50%) scale(0.78);
+    transform-origin: bottom center;
+}
+
+body.stereo-fpv #control-glyphs .glyph {
+    font-size: 11px;
+    padding: 4px 8px;
+}
+
+body.stereo-fpv #mobile-view-url {
+    display: none;
+}
+
+body.stereo-fpv #debug-hud {
+    top: 8px;
+    left: 8px;
+    gap: 8px;
+    transform: scale(0.78);
+    transform-origin: top left;
+}
+
 #debug-hud {
     position: fixed;
     top: 16px;

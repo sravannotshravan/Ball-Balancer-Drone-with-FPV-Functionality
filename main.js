@@ -76,6 +76,11 @@ const CORRECTION_ARROW_HIDE_LERP = 0.2;
 const MINI_CAM_WIDTH = 280;
 const MINI_CAM_HEIGHT = 158;
 const MINI_CAM_MARGIN = 16;
+const FPV_EYE_SEPARATION = 0.065;
+const FPV_LEFT_EYE_SHIFT = 0.012;
+const FPV_RIGHT_EYE_SHIFT = -0.006;
+const FPV_DIVIDER_WIDTH = 4;
+const DOUBLE_TAP_MAX_DELAY = 280;
 const ENV_MODE_CITY = 'city';
 const ENV_MODE_MOUNTAIN = 'mountain';
 const OBSTACLE_COLLISION_PADDING = 0.05;
@@ -271,6 +276,12 @@ camera.position.set(0, 4, 8);
 const droneFrontCamera = new THREE.PerspectiveCamera(76, MINI_CAM_WIDTH / MINI_CAM_HEIGHT, 0.03, 220);
 droneFrontCamera.position.set(0, 0.12, -0.56);
 droneFrontCamera.rotation.y = 0;
+const droneFrontCameraLeft = new THREE.PerspectiveCamera(76, MINI_CAM_WIDTH / MINI_CAM_HEIGHT, 0.03, 220);
+droneFrontCameraLeft.position.set(-FPV_EYE_SEPARATION * 0.5 - FPV_LEFT_EYE_SHIFT, 0.12, -0.56);
+droneFrontCameraLeft.rotation.y = 0;
+const droneFrontCameraRight = new THREE.PerspectiveCamera(76, MINI_CAM_WIDTH / MINI_CAM_HEIGHT, 0.03, 220);
+droneFrontCameraRight.position.set(FPV_EYE_SEPARATION * 0.5 + FPV_RIGHT_EYE_SHIFT, 0.12, -0.56);
+droneFrontCameraRight.rotation.y = 0;
 
 const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
 scene.add(ambientLight);
@@ -315,6 +326,8 @@ const drone = createDrone();
 drone.position.set(0, DRONE_HEIGHT, 0);
 scene.add(drone);
 drone.add(droneFrontCamera);
+drone.add(droneFrontCameraLeft);
+drone.add(droneFrontCameraRight);
 
 const trayCenterHighlightFill = new THREE.Mesh(
     new THREE.CircleGeometry(1, 40),
@@ -474,6 +487,208 @@ let prevGamepadXPressed = false;
 let correctionArrowScale = 0;
 let correctionActive = false;
 let environmentMode = ENV_MODE_CITY;
+let mobileStereoFpvEnabled = false;
+let lastMobileTapTime = 0;
+
+const MIRROR_STATE_CHANNEL_NAME = 'drones-project-mirror-state';
+const MIRROR_STATE_STORAGE_KEY = 'drones-project-mirror-state';
+const sharedInstanceId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+let mirrorStateChannel = null;
+let mirrorStateSnapshot = null;
+
+if ('BroadcastChannel' in window) {
+    try {
+        mirrorStateChannel = new BroadcastChannel(MIRROR_STATE_CHANNEL_NAME);
+        mirrorStateChannel.onmessage = (event) => {
+            const message = event.data;
+            if (message?.type === 'sim-state' && message.senderId !== sharedInstanceId) {
+                mirrorStateSnapshot = message.state;
+            }
+        };
+    } catch {
+        mirrorStateChannel = null;
+    }
+}
+
+window.addEventListener('storage', (event) => {
+    if (event.key !== MIRROR_STATE_STORAGE_KEY || !event.newValue) {
+        return;
+    }
+
+    try {
+        const message = JSON.parse(event.newValue);
+        if (message?.type === 'sim-state' && message.senderId !== sharedInstanceId) {
+            mirrorStateSnapshot = message.state;
+        }
+    } catch {
+        // ignore malformed storage updates
+    }
+});
+
+function captureMirrorState() {
+    return {
+        environmentMode,
+        autoBalance,
+        assistedMode,
+        centerRegionRatio,
+        trayPosition: {
+            x: trayBody.position.x,
+            y: trayBody.position.y,
+            z: trayBody.position.z,
+        },
+        trayQuaternion: {
+            x: trayBody.quaternion.x,
+            y: trayBody.quaternion.y,
+            z: trayBody.quaternion.z,
+            w: trayBody.quaternion.w,
+        },
+        trayVelocity: {
+            x: trayBody.velocity.x,
+            y: trayBody.velocity.y,
+            z: trayBody.velocity.z,
+        },
+        trayAngularVelocity: {
+            x: trayBody.angularVelocity.x,
+            y: trayBody.angularVelocity.y,
+            z: trayBody.angularVelocity.z,
+        },
+        ballPosition: {
+            x: ballBody.position.x,
+            y: ballBody.position.y,
+            z: ballBody.position.z,
+        },
+        ballQuaternion: {
+            x: ballBody.quaternion.x,
+            y: ballBody.quaternion.y,
+            z: ballBody.quaternion.z,
+            w: ballBody.quaternion.w,
+        },
+        ballVelocity: {
+            x: ballBody.velocity.x,
+            y: ballBody.velocity.y,
+            z: ballBody.velocity.z,
+        },
+        movement: {
+            x: movement.x,
+            y: movement.y,
+            z: movement.z,
+            roll: movement.roll,
+            pitch: movement.pitch,
+            yaw: movement.yaw,
+            yawRate: movement.yawRate,
+        },
+        targetMovement: {
+            x: targetMovement.x,
+            y: targetMovement.y,
+            z: targetMovement.z,
+            roll: targetMovement.roll,
+            pitch: targetMovement.pitch,
+            yawRate: targetMovement.yawRate,
+        },
+    };
+}
+
+function applyMirrorState(state) {
+    if (!state) {
+        return;
+    }
+
+    if (typeof state.environmentMode === 'string' && state.environmentMode !== environmentMode) {
+        environmentMode = state.environmentMode;
+        applyEnvironmentMode();
+    }
+
+    if (typeof state.autoBalance === 'boolean') {
+        autoBalance = state.autoBalance;
+    }
+    if (typeof state.assistedMode === 'boolean') {
+        assistedMode = state.assistedMode;
+    }
+    if (typeof state.centerRegionRatio === 'number') {
+        centerRegionRatio = THREE.MathUtils.clamp(state.centerRegionRatio, CENTER_REGION_RATIO_MIN, CENTER_REGION_RATIO_MAX);
+        updateCenterRegionUi(true);
+    }
+
+    if (state.trayPosition) {
+        trayBody.position.set(state.trayPosition.x, state.trayPosition.y, state.trayPosition.z);
+    }
+    if (state.trayQuaternion) {
+        trayBody.quaternion.set(
+            state.trayQuaternion.x,
+            state.trayQuaternion.y,
+            state.trayQuaternion.z,
+            state.trayQuaternion.w
+        );
+    }
+    if (state.trayVelocity) {
+        trayBody.velocity.set(state.trayVelocity.x, state.trayVelocity.y, state.trayVelocity.z);
+    }
+    if (state.trayAngularVelocity) {
+        trayBody.angularVelocity.set(
+            state.trayAngularVelocity.x,
+            state.trayAngularVelocity.y,
+            state.trayAngularVelocity.z
+        );
+    }
+
+    if (state.ballPosition) {
+        ballBody.position.set(state.ballPosition.x, state.ballPosition.y, state.ballPosition.z);
+    }
+    if (state.ballQuaternion) {
+        ballBody.quaternion.set(
+            state.ballQuaternion.x,
+            state.ballQuaternion.y,
+            state.ballQuaternion.z,
+            state.ballQuaternion.w
+        );
+    }
+    if (state.ballVelocity) {
+        ballBody.velocity.set(state.ballVelocity.x, state.ballVelocity.y, state.ballVelocity.z);
+    }
+
+    if (state.movement) {
+        movement.x = state.movement.x ?? movement.x;
+        movement.y = state.movement.y ?? movement.y;
+        movement.z = state.movement.z ?? movement.z;
+        movement.roll = state.movement.roll ?? movement.roll;
+        movement.pitch = state.movement.pitch ?? movement.pitch;
+        movement.yaw = state.movement.yaw ?? movement.yaw;
+        movement.yawRate = state.movement.yawRate ?? movement.yawRate;
+    }
+
+    if (state.targetMovement) {
+        targetMovement.x = state.targetMovement.x ?? targetMovement.x;
+        targetMovement.y = state.targetMovement.y ?? targetMovement.y;
+        targetMovement.z = state.targetMovement.z ?? targetMovement.z;
+        targetMovement.roll = state.targetMovement.roll ?? targetMovement.roll;
+        targetMovement.pitch = state.targetMovement.pitch ?? targetMovement.pitch;
+        targetMovement.yawRate = state.targetMovement.yawRate ?? targetMovement.yawRate;
+    }
+}
+
+function publishMirrorState() {
+    const payload = captureMirrorState();
+
+    mirrorStateSnapshot = payload;
+
+    if (mirrorStateChannel) {
+        try {
+            mirrorStateChannel.postMessage({
+                type: 'sim-state',
+                senderId: sharedInstanceId,
+                state: payload,
+            });
+        } catch {
+            // ignore broadcast failures
+        }
+    }
+
+    try {
+        localStorage.setItem(MIRROR_STATE_STORAGE_KEY, JSON.stringify({ type: 'sim-state', state: payload }));
+    } catch {
+        // ignore storage failures
+    }
+}
 
 window.addEventListener('keydown', (event) => {
     if (event.code === 'KeyB') {
@@ -530,6 +745,7 @@ const compassHeading = document.getElementById('compass-heading');
 const keyboardGlyphs = document.getElementById('keyboard-glyphs');
 const gamepadGlyphs = document.getElementById('gamepad-glyphs');
 const activeInputLabel = document.getElementById('active-input-label');
+const fpvDivider = document.getElementById('fpv-divider');
 const gameTelemetry = {
     mode: document.getElementById('gh-mode'),
     assisted: document.getElementById('gh-assisted'),
@@ -796,6 +1012,49 @@ function toggleEnvironmentMode() {
 
 applyEnvironmentMode();
 updateMobileViewAddressDisplay();
+
+function toggleMobileStereoFpv() {
+    if (!isMobileFrontView) {
+        return;
+    }
+
+    mobileStereoFpvEnabled = !mobileStereoFpvEnabled;
+
+    document.body.classList.toggle('stereo-fpv', mobileStereoFpvEnabled);
+
+    if (fpvDivider) {
+        fpvDivider.classList.toggle('hidden', !mobileStereoFpvEnabled);
+    }
+}
+
+if (isMobileFrontView) {
+    document.body.classList.toggle('stereo-fpv', mobileStereoFpvEnabled);
+    window.addEventListener('dblclick', toggleMobileStereoFpv);
+    window.addEventListener('touchend', () => {
+        const now = performance.now();
+        if (now - lastMobileTapTime <= DOUBLE_TAP_MAX_DELAY) {
+            toggleMobileStereoFpv();
+            lastMobileTapTime = 0;
+        } else {
+            lastMobileTapTime = now;
+        }
+    }, { passive: true });
+}
+
+if (isMobileFrontView) {
+    try {
+        const savedState = localStorage.getItem(MIRROR_STATE_STORAGE_KEY);
+        if (savedState) {
+            const message = JSON.parse(savedState);
+            if (message?.type === 'sim-state' && message.state) {
+                mirrorStateSnapshot = message.state;
+                applyMirrorState(mirrorStateSnapshot);
+            }
+        }
+    } catch {
+        // ignore restore failures
+    }
+}
 
 function updateBallLocalState() {
     trayToWorldQuat.set(
@@ -1213,14 +1472,8 @@ function updateMovementState() {
             assistPulseCycle.rollTimer = 0;
             assistPulseCycle.pitchTimer = 0;
 
-            const stickRoll = forwardStickOverride ? 0 : effectiveRollInput * TILT_LIMIT * 0.78;
-            const stickPitch = -effectivePitchInput * TILT_LIMIT * 0.78;
-            const safetyInfluence = THREE.MathUtils.clamp((edgeRatio - EDGE_RESCUE_START) / (1 - EDGE_RESCUE_START), 0, 1);
-            const safetyRoll = THREE.MathUtils.clamp(stabilizeX, -TILT_LIMIT * 0.82, TILT_LIMIT * 0.82);
-            const safetyPitch = THREE.MathUtils.clamp(-stabilizeZ, -TILT_LIMIT * 0.82, TILT_LIMIT * 0.82);
-
-            targetMovement.roll = THREE.MathUtils.lerp(stickRoll, safetyRoll, forwardStickOverride ? 0 : safetyInfluence);
-            targetMovement.pitch = THREE.MathUtils.lerp(stickPitch, safetyPitch, forwardStickOverride ? 0 : safetyInfluence);
+            targetMovement.roll = forwardStickOverride ? 0 : THREE.MathUtils.clamp(effectiveRollInput * TILT_LIMIT * 0.78, -TILT_LIMIT, TILT_LIMIT);
+            targetMovement.pitch = THREE.MathUtils.clamp(-effectivePitchInput * TILT_LIMIT * 0.78, -TILT_LIMIT, TILT_LIMIT);
         } else if (inCenterRegion) {
             targetMovement.roll = 0;
             targetMovement.pitch = 0;
@@ -1313,8 +1566,8 @@ function updateMovementState() {
         }
     } else {
         if (rightStickNeutral) {
-            targetMovement.roll = THREE.MathUtils.clamp(stabilizeX * edgeDanger, -TILT_LIMIT, TILT_LIMIT);
-            targetMovement.pitch = THREE.MathUtils.clamp(-stabilizeZ * edgeDanger, -TILT_LIMIT, TILT_LIMIT);
+            targetMovement.roll = 0;
+            targetMovement.pitch = 0;
         } else {
             targetMovement.roll = THREE.MathUtils.clamp(effectiveRollInput * TILT_LIMIT * 0.8, -TILT_LIMIT, TILT_LIMIT);
             targetMovement.pitch = THREE.MathUtils.clamp(-effectivePitchInput * TILT_LIMIT * 0.8, -TILT_LIMIT, TILT_LIMIT);
@@ -1325,11 +1578,11 @@ function updateMovementState() {
     let rightCommand = input.moveX * MOVE_SPEED;
 
     const forwardFromPitch = effectivePitchInput * MOVE_SPEED * PITCH_ROLL_MOVE_GAIN;
-    const rightFromRoll = pitchDominantInput ? 0 : effectiveRollInput * MOVE_SPEED * PITCH_ROLL_MOVE_GAIN;
+    const rightFromRoll = pitchDominantInput ? 0 : -effectiveRollInput * MOVE_SPEED * PITCH_ROLL_MOVE_GAIN;
     forwardCommand += forwardFromPitch;
     rightCommand += rightFromRoll;
 
-    if (assistedMode && !centerHoldActive && !forwardStickOverride) {
+    if (assistedMode && !centerHoldActive && !forwardStickOverride && pilotPlanarNeutral) {
         if (!inCenterRegion) {
             const centerRight = THREE.MathUtils.clamp(
                 (ballLocalPosition.x * ASSIST_CENTER_TRANSLATION_P + ballLocalVelocity.x * ASSIST_CENTER_TRANSLATION_D),
@@ -1601,16 +1854,51 @@ function renderMiniCameraView() {
     miniCamFrame.style.width = `${insetWidth}px`;
     miniCamFrame.style.height = `${insetHeight}px`;
 
-    droneFrontCamera.aspect = insetWidth / insetHeight;
-    droneFrontCamera.updateProjectionMatrix();
+    renderFrontCameraView(insetX, insetY, insetWidth, insetHeight, true);
+}
+
+function renderCameraView(activeCamera, viewportX, viewportY, viewportWidth, viewportHeight, useScissor = false) {
+    activeCamera.aspect = viewportWidth / viewportHeight;
+    activeCamera.updateProjectionMatrix();
+
+    const previousAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.setScissorTest(useScissor);
+    renderer.setViewport(viewportX, viewportY, viewportWidth, viewportHeight);
+
+    if (useScissor) {
+        renderer.setScissor(viewportX, viewportY, viewportWidth, viewportHeight);
+    }
+
+    renderer.clearDepth();
+    renderer.render(scene, activeCamera);
+
+    if (useScissor) {
+        renderer.setScissorTest(false);
+    }
+
+    renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+    renderer.autoClear = previousAutoClear;
+}
+
+function renderFrontCameraView(viewportX, viewportY, viewportWidth, viewportHeight, useScissor = false) {
+    renderCameraView(droneFrontCamera, viewportX, viewportY, viewportWidth, viewportHeight, useScissor);
+}
+
+function renderStereoMobileView() {
+    const dividerWidth = FPV_DIVIDER_WIDTH;
+    const availableWidth = Math.max(0, window.innerWidth - dividerWidth);
+    const leftWidth = Math.floor(availableWidth / 2);
+    const rightWidth = availableWidth - leftWidth;
 
     const previousAutoClear = renderer.autoClear;
     renderer.autoClear = false;
     renderer.setScissorTest(true);
-    renderer.setViewport(insetX, insetY, insetWidth, insetHeight);
-    renderer.setScissor(insetX, insetY, insetWidth, insetHeight);
-    renderer.clearDepth();
-    renderer.render(scene, droneFrontCamera);
+    renderer.clear();
+
+    renderCameraView(droneFrontCameraLeft, 0, 0, leftWidth, window.innerHeight, true);
+    renderCameraView(droneFrontCameraRight, leftWidth + dividerWidth, 0, rightWidth, window.innerHeight, true);
+
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
     renderer.autoClear = previousAutoClear;
@@ -1618,6 +1906,22 @@ function renderMiniCameraView() {
 
 function animate() {
     requestAnimationFrame(animate);
+
+    if (isMobileFrontView) {
+        if (mirrorStateSnapshot) {
+            applyMirrorState(mirrorStateSnapshot);
+        }
+
+        updateBallLocalState();
+        syncVisuals();
+        updateTelemetry();
+        if (mobileStereoFpvEnabled) {
+            renderStereoMobileView();
+        } else {
+            renderFrontCameraView(0, 0, window.innerWidth, window.innerHeight, false);
+        }
+        return;
+    }
 
     updateInput();
     handleGamepadToggles();
@@ -1642,15 +1946,10 @@ function animate() {
     syncVisuals();
     updateCamera();
     updateTelemetry();
+    publishMirrorState();
 
-    if (isMobileFrontView) {
-        droneFrontCamera.aspect = window.innerWidth / window.innerHeight;
-        droneFrontCamera.updateProjectionMatrix();
-        renderer.render(scene, droneFrontCamera);
-    } else {
-        renderer.render(scene, camera);
-        renderMiniCameraView();
-    }
+    renderer.render(scene, camera);
+    renderMiniCameraView();
 }
 
 animate();
@@ -1663,5 +1962,8 @@ window.addEventListener('resize', () => {
         droneFrontCamera.updateProjectionMatrix();
     }
     renderer.setSize(window.innerWidth, window.innerHeight);
+    if (!isMobileFrontView) {
+        renderMiniCameraView();
+    }
 });
 

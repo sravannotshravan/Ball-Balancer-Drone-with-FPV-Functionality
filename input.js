@@ -50,9 +50,9 @@ function getGamepadAxes() {
     }
 
     return {
-        yaw: applyDeadzone(gamepad.axes[0] ?? 0),
+        yaw: -applyDeadzone(gamepad.axes[0] ?? 0),
         throttle: applyDeadzone(-(gamepad.axes[1] ?? 0)),
-        roll: applyDeadzone(gamepad.axes[2] ?? 0),
+        roll: -applyDeadzone(gamepad.axes[2] ?? 0),
         pitch: applyDeadzone(-(gamepad.axes[3] ?? 0)),
     };
 }
