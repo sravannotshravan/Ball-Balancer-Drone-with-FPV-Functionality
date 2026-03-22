@@ -49,3 +49,13 @@ canvas {
     padding: 2px 0;
     font-size: 12px;
 }
+
+.status-good {
+    color: #8dff9f;
+    font-weight: 600;
+}
+
+.status-bad {
+    color: #ff8b8b;
+    font-weight: 600;
+}

@@ -89,6 +89,7 @@ trayBody.addShape(
 world.addBody(trayBody);
 
 const ballRadius = 0.18;
+const traySafeHalf = trayInnerHalf - trayWallThickness - ballRadius;
 const ballMesh = new THREE.Mesh(
     new THREE.SphereGeometry(ballRadius, 28, 20),
     new THREE.MeshStandardMaterial({ color: 0xff4e42 })
@@ -134,10 +135,14 @@ const targetMovement = {
 };
 
 let autoBalance = false;
+let assistedMode = true;
 
 window.addEventListener('keydown', (event) => {
     if (event.code === 'KeyB') {
         autoBalance = !autoBalance;
+    }
+    if (event.code === 'KeyG') {
+        assistedMode = !assistedMode;
     }
 });
 
@@ -147,6 +152,9 @@ const cameraOffset = new THREE.Vector3(0, 3.8, 7.5);
 const cameraTargetPos = new THREE.Vector3();
 const telemetry = {
     mode: document.getElementById('tm-mode'),
+    assisted: document.getElementById('tm-assisted'),
+    ballInTray: document.getElementById('tm-ball-in-tray'),
+    position: document.getElementById('tm-position'),
     altitude: document.getElementById('tm-altitude'),
     speed: document.getElementById('tm-speed'),
     pitch: document.getElementById('tm-pitch'),
@@ -154,6 +162,44 @@ const telemetry = {
     yaw: document.getElementById('tm-yaw'),
 };
 const attitudeEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+const trayToWorldQuat = new THREE.Quaternion();
+const worldToTrayQuat = new THREE.Quaternion();
+const ballOffsetWorld = new THREE.Vector3();
+const relativeVelocityWorld = new THREE.Vector3();
+const ballLocalPosition = new THREE.Vector3();
+const ballLocalVelocity = new THREE.Vector3();
+
+function updateBallLocalState() {
+    trayToWorldQuat.set(
+        trayBody.quaternion.x,
+        trayBody.quaternion.y,
+        trayBody.quaternion.z,
+        trayBody.quaternion.w
+    );
+    worldToTrayQuat.copy(trayToWorldQuat).invert();
+
+    ballOffsetWorld.set(
+        ballBody.position.x - trayBody.position.x,
+        ballBody.position.y - trayBody.position.y,
+        ballBody.position.z - trayBody.position.z
+    );
+    ballLocalPosition.copy(ballOffsetWorld).applyQuaternion(worldToTrayQuat);
+
+    relativeVelocityWorld.set(
+        ballBody.velocity.x - trayBody.velocity.x,
+        ballBody.velocity.y - trayBody.velocity.y,
+        ballBody.velocity.z - trayBody.velocity.z
+    );
+    ballLocalVelocity.copy(relativeVelocityWorld).applyQuaternion(worldToTrayQuat);
+}
+
+function isBallInsideTray() {
+    return (
+        Math.abs(ballLocalPosition.x) <= traySafeHalf &&
+        Math.abs(ballLocalPosition.z) <= traySafeHalf &&
+        ballLocalPosition.y >= -0.08
+    );
+}
 
 function toDegrees(radians) {
     return radians * (180 / Math.PI);
@@ -167,7 +213,15 @@ function updateTelemetry() {
     const speed = Math.hypot(trayBody.velocity.x, trayBody.velocity.y, trayBody.velocity.z);
     attitudeEuler.setFromQuaternion(drone.quaternion, 'YXZ');
 
-    telemetry.mode.textContent = autoBalance ? 'AUTO' : 'MANUAL';
+    telemetry.mode.textContent = autoBalance ? 'AUTO-BAL' : 'MANUAL';
+    telemetry.assisted.textContent = assistedMode ? 'ON' : 'OFF';
+
+    const ballInside = isBallInsideTray();
+    telemetry.ballInTray.textContent = ballInside ? 'YES' : 'NO';
+    telemetry.ballInTray.classList.toggle('status-good', ballInside);
+    telemetry.ballInTray.classList.toggle('status-bad', !ballInside);
+
+    telemetry.position.textContent = `(${drone.position.x.toFixed(2)}, ${drone.position.y.toFixed(2)}, ${drone.position.z.toFixed(2)})`;
     telemetry.altitude.textContent = `${drone.position.y.toFixed(2)} m`;
     telemetry.speed.textContent = `${speed.toFixed(2)} m/s`;
     telemetry.pitch.textContent = `${toDegrees(attitudeEuler.x).toFixed(1)}°`;
@@ -176,15 +230,43 @@ function updateTelemetry() {
 }
 
 function updateMovementState() {
-    targetMovement.x = input.moveX * MOVE_SPEED;
-    targetMovement.z = input.moveZ * MOVE_SPEED;
+    const edgeRatio = Math.max(
+        Math.abs(ballLocalPosition.x) / Math.max(0.001, traySafeHalf),
+        Math.abs(ballLocalPosition.z) / Math.max(0.001, traySafeHalf)
+    );
+
+    const safetyScale = assistedMode
+        ? THREE.MathUtils.clamp(1 - edgeRatio * 0.75, 0.25, 1)
+        : 1;
+
+    targetMovement.x = input.moveX * MOVE_SPEED * safetyScale;
+    targetMovement.z = input.moveZ * MOVE_SPEED * safetyScale;
 
     if (autoBalance) {
-        const kP = 0.85;
-        const errorX = ballBody.position.x - trayBody.position.x;
-        const errorZ = ballBody.position.z - trayBody.position.z;
-        targetMovement.tiltX = THREE.MathUtils.clamp(errorX * kP, -TILT_LIMIT, TILT_LIMIT);
-        targetMovement.tiltZ = THREE.MathUtils.clamp(-errorZ * kP, -TILT_LIMIT, TILT_LIMIT);
+        const kP = 1.5;
+        const kD = 0.38;
+        const stabilizeX = ballLocalPosition.x * kP + ballLocalVelocity.x * kD;
+        const stabilizeZ = ballLocalPosition.z * kP + ballLocalVelocity.z * kD;
+        targetMovement.tiltX = THREE.MathUtils.clamp(stabilizeX, -TILT_LIMIT, TILT_LIMIT);
+        targetMovement.tiltZ = THREE.MathUtils.clamp(-stabilizeZ, -TILT_LIMIT, TILT_LIMIT);
+    } else if (assistedMode) {
+        const stabilizeP = 1.25;
+        const stabilizeD = 0.32;
+        const intentGain = 0.16;
+        const stabilizeX = ballLocalPosition.x * stabilizeP + ballLocalVelocity.x * stabilizeD;
+        const stabilizeZ = ballLocalPosition.z * stabilizeP + ballLocalVelocity.z * stabilizeD;
+        const intentTiltX = input.moveX * intentGain;
+        const intentTiltZ = input.moveZ * intentGain;
+        targetMovement.tiltX = THREE.MathUtils.clamp(
+            stabilizeX + intentTiltX + input.tiltX * 0.18,
+            -TILT_LIMIT,
+            TILT_LIMIT
+        );
+        targetMovement.tiltZ = THREE.MathUtils.clamp(
+            -(stabilizeZ + intentTiltZ) - input.tiltZ * 0.18,
+            -TILT_LIMIT,
+            TILT_LIMIT
+        );
     } else {
         targetMovement.tiltX = THREE.MathUtils.clamp(input.tiltX * TILT_LIMIT, -TILT_LIMIT, TILT_LIMIT);
         targetMovement.tiltZ = THREE.MathUtils.clamp(-input.tiltZ * TILT_LIMIT, -TILT_LIMIT, TILT_LIMIT);
@@ -242,6 +324,7 @@ function animate() {
     requestAnimationFrame(animate);
 
     updateInput();
+    updateBallLocalState();
     updateMovementState();
     updateTrayBody();
 
