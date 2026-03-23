@@ -1,4 +1,4 @@
-# Drones Project Gemini
+# Ball Balancer Drone with FPV Functionality
 
 A browser-based drone simulation with a front-mounted camera, tray-ball balancing, assist mode, and mobile stereo FPV view.
 
