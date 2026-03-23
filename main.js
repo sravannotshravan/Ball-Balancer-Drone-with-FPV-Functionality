@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { createDrone } from './drone.js';
 import { activeInputSource, input, updateInput } from './input.js';
+import { NavigationGrid } from './pathfinding.js';
+import { AutonomySystem } from './autonomy.js';
 
 const FIXED_TIME_STEP = 1 / 60;
 const MOVE_SPEED = 4.0;
@@ -31,6 +33,9 @@ const ASSIST_VEL_MICRO_GAIN = 0.06;
 const ASSIST_CENTER_TRANSLATION_P = 0.95;
 const ASSIST_CENTER_TRANSLATION_D = 0.55;
 const ASSIST_CENTER_TRANSLATION_MAX = 0.55;
+const ASSIST_CENTER_LOOKAHEAD = 0.24;
+const ASSIST_CENTER_CAPTURE_BOOST = 1.2;
+const ASSIST_CENTER_BRAKE_GAIN = 0.8;
 const ASSIST_INPUT_NEUTRAL = 0.08;
 const ASSIST_CENTER_HOLD_VEL = 0.18;
 const ASSIST_STOP_DAMPING = 0.34;
@@ -57,6 +62,11 @@ const EDGE_BOUNCE_COOLDOWN = 0.08;
 const CENTER_LOCK_SPEED = 0.42;
 const CENTER_LOCK_TRANSLATION = 0.02;
 const CENTER_LOCK_DAMPING = 0.04;
+const CENTER_LOCK_POSITION_GAIN = 1.95;
+const CENTER_LOCK_VELOCITY_GAIN = 1.05;
+const CENTER_LOCK_MAX_VELOCITY = 0.1;
+const CENTER_LOCK_SNAP_POSITION = 0.006;
+const CENTER_LOCK_SNAP_VELOCITY = 0.008;
 const WIND_DRAG_TRIGGER_RADIUS = 140;
 const WIND_PULSE_DECAY = 0.84;
 const WIND_PULSE_MIN = 0.0015;
@@ -295,6 +305,10 @@ function showWindIndicator(clickX, clickY, targetX, targetY, strength) {
 }
 
 function handleWindClick(event) {
+    if (isMobileFrontView) {
+        return;
+    }
+
     if (event.button !== 0) {
         return;
     }
@@ -321,6 +335,63 @@ function handleWindClick(event) {
     injectWindPulse(deltaX, deltaY, strength);
     showWindIndicator(event.clientX, event.clientY, droneScreenX, droneScreenY, strength);
     event.preventDefault();
+}
+
+const worldPickRaycaster = new THREE.Raycaster();
+const worldPickPointer = new THREE.Vector2();
+const worldPickPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const worldPickHit = new THREE.Vector3();
+let worldPickMode = false;
+
+function updateWorldPickUi() {
+    if (toggleWorldPickButton) {
+        toggleWorldPickButton.classList.toggle('active', worldPickMode);
+        toggleWorldPickButton.textContent = worldPickMode ? 'Cancel World Pick' : 'Pick In World';
+    }
+
+    if (worldPickHint) {
+        worldPickHint.classList.toggle('hidden', !worldPickMode);
+    }
+}
+
+function setWorldPickMode(enabled) {
+    worldPickMode = Boolean(enabled) && !isMobileFrontView;
+    updateWorldPickUi();
+}
+
+function pickDestinationFromWorld(event) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    worldPickPointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    worldPickPointer.y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
+    worldPickRaycaster.setFromCamera(worldPickPointer, camera);
+
+    if (!worldPickRaycaster.ray.intersectPlane(worldPickPlane, worldPickHit)) {
+        return false;
+    }
+
+    const success = setAutonomousDestination(worldPickHit.x, worldPickHit.z);
+    if (success) {
+        setWorldPickMode(false);
+    }
+    return success;
+}
+
+function handleWorldPointerDown(event) {
+    if (isMobileFrontView) {
+        return;
+    }
+
+    if (event.button !== 0) {
+        return;
+    }
+
+    if (worldPickMode) {
+        event.preventDefault();
+        pickDestinationFromWorld(event);
+        return;
+    }
+
+    handleWindClick(event);
 }
 
 const scene = new THREE.Scene();
@@ -360,7 +431,9 @@ windIndicator.appendChild(windIndicatorLine);
 windIndicator.appendChild(windIndicatorHead);
 windIndicator.appendChild(windIndicatorLabel);
 document.body.appendChild(windIndicator);
-window.addEventListener('pointerdown', handleWindClick, { passive: false });
+if (!isMobileFrontView) {
+    renderer.domElement.addEventListener('pointerdown', handleWorldPointerDown, { passive: false });
+}
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
 camera.position.set(0, 4, 8);
@@ -572,13 +645,35 @@ const assistPulseCycle = {
 
 let autoBalance = false;
 let assistedMode = true;
+
+// Autonomous Flight System
+const autonomy = new AutonomySystem();
+let navigationGrid = null;  // Will be initialized when environment loads
+let pathVisualizationLine = null;  // 3D path line visualization
+let destinationMarker = null;  // 3D destination marker
+const pathVisualizationMaterial = new THREE.LineBasicMaterial({
+    color: 0x39d8ff,
+    transparent: true,
+    opacity: 0.9,
+});
+const destinationMarkerGeometry = new THREE.SphereGeometry(0.13, 18, 14);
+const destinationMarkerMaterial = new THREE.MeshStandardMaterial({
+    color: 0xffd35a,
+    emissive: 0x5f3c00,
+    emissiveIntensity: 0.92,
+    transparent: true,
+    opacity: 0.95,
+});
 let outOfTrayTime = 0;
 let centerRegionRatio = CENTER_REGION_RATIO_DEFAULT;
 let centerHoldActive = false;
 let edgeBounceCooldown = 0;
 let debugHudVisible = false;
+let droneCrashed = false;
 let prevGamepadYPressed = false;
 let prevGamepadXPressed = false;
+let prevGamepadLBPressed = false;
+let prevGamepadRBPressed = false;
 let correctionArrowScale = 0;
 let correctionActive = false;
 let environmentMode = ENV_MODE_CITY;
@@ -794,14 +889,48 @@ function publishMirrorState() {
 }
 
 window.addEventListener('keydown', (event) => {
+    if (event.code === 'Escape' && destinationModal && !destinationModal.classList.contains('hidden')) {
+        closeDestinationModal();
+        return;
+    }
+    if (event.code === 'Escape' && worldPickMode) {
+        setWorldPickMode(false);
+        return;
+    }
     if (event.code === 'KeyB') {
         autoBalance = !autoBalance;
     }
     if (event.code === 'KeyG') {
         assistedMode = !assistedMode;
+        if (!assistedMode) {
+            centerHoldActive = false;
+            correctionActive = false;
+            correctionArrow.visible = false;
+            correctionArrowScale = 0;
+            correctionArrow.scale.setScalar(0.001);
+            assistPulseTilt.roll = 0;
+            assistPulseTilt.pitch = 0;
+            assistPulseCycle.rollOn = false;
+            assistPulseCycle.pitchOn = false;
+            assistPulseCycle.rollTimer = 0;
+            assistPulseCycle.pitchTimer = 0;
+            targetMovement.roll = 0;
+            targetMovement.pitch = 0;
+            targetMovement.x = 0;
+            targetMovement.z = 0;
+        }
     }
     if (event.code === 'KeyT') {
         toggleEnvironmentMode();
+    }
+    if (event.code === 'KeyN') {
+        openDestinationModal();
+    }
+    if (event.code === 'KeyM') {
+        setWorldPickMode(!worldPickMode);
+    }
+    if (event.code === 'KeyL') {
+        autonomy.setEnabled(!autonomy.enabled);
     }
     if (event.code === 'F3') {
         event.preventDefault();
@@ -824,6 +953,9 @@ const telemetry = {
     mode: document.getElementById('tm-mode'),
     assisted: document.getElementById('tm-assisted'),
     environment: document.getElementById('tm-env'),
+    autonomy: document.getElementById('tm-autonomy'),
+    destination: document.getElementById('tm-destination'),
+    pathStatus: document.getElementById('tm-path-status'),
     frontDistance: document.getElementById('tm-front-distance'),
     ballInTray: document.getElementById('tm-ball-in-tray'),
     ballInCenter: document.getElementById('tm-center'),
@@ -838,6 +970,7 @@ const telemetry = {
 const centerRegionSlider = document.getElementById('center-region-slider');
 const centerRegionValue = document.getElementById('center-region-value');
 const overlay = document.getElementById('overlay');
+const overlayTitle = overlay ? overlay.querySelector('.overlay-card h2') : null;
 const resetButton = document.getElementById('reset-btn');
 const debugHud = document.getElementById('debug-hud');
 const gameHud = document.getElementById('game-hud');
@@ -853,10 +986,20 @@ const fpvDivider = document.getElementById('fpv-divider');
 const vrMask = document.getElementById('vr-mask');
 const miniMapCanvas = document.getElementById('mini-map-canvas');
 const miniMapContext = miniMapCanvas ? miniMapCanvas.getContext('2d') : null;
+const destinationModal = document.getElementById('destination-modal');
+const destinationXInput = document.getElementById('dest-x');
+const destinationZInput = document.getElementById('dest-z');
+const openDestinationButton = document.getElementById('open-destination-modal');
+const toggleWorldPickButton = document.getElementById('toggle-world-pick');
+const clearDestinationButton = document.getElementById('clear-destination');
+const worldPickHint = document.getElementById('world-pick-hint');
 const gameTelemetry = {
     mode: document.getElementById('gh-mode'),
     assisted: document.getElementById('gh-assisted'),
     environment: document.getElementById('gh-env'),
+    autonomy: document.getElementById('gh-autonomy'),
+    destination: document.getElementById('gh-destination'),
+    pathStatus: document.getElementById('gh-path-status'),
     frontDistance: document.getElementById('gh-front-distance'),
     altitude: document.getElementById('gh-altitude'),
     speed: document.getElementById('gh-speed'),
@@ -880,6 +1023,63 @@ const correctionUpAxis = new THREE.Vector3(0, 1, 0);
 const frontSensorOrigin = new THREE.Vector3();
 const frontSensorDirection = new THREE.Vector3();
 const minimapPoint = new THREE.Vector2();
+
+function ensureNavigationGrid() {
+    if (!navigationGrid) {
+        initializeNavigationGrid();
+    }
+    return navigationGrid;
+}
+
+function findBestDestinationPoint(targetX, targetZ) {
+    const grid = ensureNavigationGrid();
+    if (!grid) {
+        return null;
+    }
+
+    if (grid.isPointWalkable(targetX, targetZ)) {
+        return { x: targetX, z: targetZ };
+    }
+
+    const nearestCell = grid.findNearestWalkable(targetX, targetZ, 12);
+    if (!nearestCell) {
+        return null;
+    }
+
+    return grid.gridToWorld(nearestCell.ix, nearestCell.iz);
+}
+
+function clearAutonomousRoute() {
+    setWorldPickMode(false);
+    autonomy.clearRoute(false);
+    autonomy.setEnabled(false);
+    clearPathVisualization();
+}
+
+function setAutonomousDestination(destX, destZ) {
+    const resolvedDestination = findBestDestinationPoint(destX, destZ);
+    if (!resolvedDestination) {
+        alert('No reachable destination was found there. Try another point on the map.');
+        return false;
+    }
+
+    const error = autonomy.setDestination(resolvedDestination.x, resolvedDestination.z, navigationGrid);
+    if (error) {
+        alert(`Unable to set destination: ${error}`);
+        return false;
+    }
+
+    autonomy.setEnabled(true);
+    autonomy.planPath(trayBody.position.x, trayBody.position.z, navigationGrid);
+
+    if (autonomy.waypointPath.length === 0 && !autonomy.isDestinationReached()) {
+        alert(autonomy.lastPlanError || 'No valid route could be planned to that point.');
+        return false;
+    }
+
+    updatePathVisualization();
+    return true;
+}
 
 function drawMiniMap() {
     if (!miniMapCanvas || !miniMapContext) {
@@ -965,6 +1165,33 @@ function drawMiniMap() {
         drawnObstacles += 1;
     }
 
+    const destination = autonomy.getDestination();
+    const waypointPath = autonomy.getWaypointPath();
+    if (autonomy.enabled && autonomy.hasDestination && destination && waypointPath.length > 0) {
+        context.strokeStyle = 'rgba(57, 216, 255, 0.9)';
+        context.fillStyle = 'rgba(255, 211, 90, 0.95)';
+        context.lineWidth = 2;
+        context.beginPath();
+        context.moveTo(centerX, centerY);
+
+        for (let index = 0; index < waypointPath.length; index += 1) {
+            const point = waypointPath[index];
+            const offsetX = point.x - droneX;
+            const offsetZ = point.z - droneZ;
+            minimapPoint.set(offsetX, offsetZ).multiplyScalar(pixelsPerMeter);
+            context.lineTo(centerX + minimapPoint.x, centerY + minimapPoint.y);
+        }
+
+        context.stroke();
+
+        const destinationOffsetX = destination.x - droneX;
+        const destinationOffsetZ = destination.z - droneZ;
+        minimapPoint.set(destinationOffsetX, destinationOffsetZ).multiplyScalar(pixelsPerMeter);
+        context.beginPath();
+        context.arc(centerX + minimapPoint.x, centerY + minimapPoint.y, 4, 0, Math.PI * 2);
+        context.fill();
+    }
+
     context.restore();
 
     context.strokeStyle = 'rgba(196, 238, 255, 0.5)';
@@ -1043,6 +1270,58 @@ function createTrayCoordinateSystem(axisHalfSize) {
     group.add(ballMarker);
 
     return { group, ballMarker };
+}
+
+function clearPathVisualization() {
+    if (pathVisualizationLine) {
+        scene.remove(pathVisualizationLine);
+        pathVisualizationLine.geometry.dispose();
+        pathVisualizationLine = null;
+    }
+
+    if (destinationMarker) {
+        scene.remove(destinationMarker);
+        destinationMarker = null;
+    }
+}
+
+function updatePathVisualization() {
+    const destination = autonomy.getDestination();
+    const waypointPath = autonomy.getWaypointPath();
+    const hasActivePath = autonomy.enabled && autonomy.hasDestination && destination && waypointPath.length > 0;
+
+    if (!hasActivePath) {
+        clearPathVisualization();
+        return;
+    }
+
+    const pathPoints = [
+        new THREE.Vector3(trayBody.position.x, trayBody.position.y + 0.12, trayBody.position.z),
+        ...waypointPath.map((point) => new THREE.Vector3(point.x, trayBody.position.y + 0.12, point.z)),
+    ];
+    const pathSignature = pathPoints
+        .map(point => `${point.x.toFixed(2)},${point.y.toFixed(2)},${point.z.toFixed(2)}`)
+        .join('|');
+
+    if (!pathVisualizationLine) {
+        pathVisualizationLine = new THREE.Line(new THREE.BufferGeometry(), pathVisualizationMaterial);
+        pathVisualizationLine.frustumCulled = false;
+        scene.add(pathVisualizationLine);
+    }
+
+    if (pathVisualizationLine.userData.signature !== pathSignature) {
+        pathVisualizationLine.geometry.dispose();
+        pathVisualizationLine.geometry = new THREE.BufferGeometry().setFromPoints(pathPoints);
+        pathVisualizationLine.userData.signature = pathSignature;
+    }
+
+    if (!destinationMarker) {
+        destinationMarker = new THREE.Mesh(destinationMarkerGeometry, destinationMarkerMaterial);
+        destinationMarker.frustumCulled = false;
+        scene.add(destinationMarker);
+    }
+
+    destinationMarker.position.set(destination.x, trayBody.position.y + 0.16, destination.z);
 }
 
 function rayAabbDistance(origin, direction, box) {
@@ -1328,6 +1607,23 @@ function getEnvironmentLabel() {
     return environmentMode === ENV_MODE_CITY ? 'CITY' : 'MOUNTAIN PLAINS';
 }
 
+function initializeNavigationGrid() {
+    // Create navigation grid for A* pathfinding
+    navigationGrid = new NavigationGrid(-120, 120, -120, 120, 2.0);
+
+    // Convert obstacle bodies to collider objects
+    const colliders = activeObstacleColliders
+        .filter(collider => collider && typeof collider.x === 'number' && typeof collider.z === 'number')
+        .map(collider => ({
+            x: collider.x,
+            z: collider.z,
+            hx: collider.hx,
+            hz: collider.hz,
+        }));
+
+    navigationGrid.markObstacles(colliders, 0.8);
+}
+
 function applyEnvironmentMode() {
     const cityActive = environmentMode === ENV_MODE_CITY;
     cityEnvironment.visible = cityActive;
@@ -1346,6 +1642,14 @@ function applyEnvironmentMode() {
 
     groundVisualMaterial.color.setHex(cityActive ? 0x646c75 : 0x6f8c63);
     scene.background.set(cityActive ? 0xa8b6ca : 0xb7d0e8);
+
+    // Reinitialize navigation grid for pathfinding
+    initializeNavigationGrid();
+
+    // If autonomous is active with path, replan
+    if (autonomy.enabled && autonomy.hasDestination) {
+        autonomy.planPath(trayBody.position.x, trayBody.position.z, navigationGrid);
+    }
 }
 
 function toggleEnvironmentMode() {
@@ -1355,6 +1659,7 @@ function toggleEnvironmentMode() {
 
 applyEnvironmentMode();
 updateMobileViewAddressDisplay();
+initializeAutonomousUI();
 
 function toggleMobileStereoFpv() {
     if (!isMobileFrontView) {
@@ -1509,6 +1814,21 @@ function computeMicroTiltTarget(position, velocity, edgeDanger) {
     return THREE.MathUtils.clamp(correction, -tiltCap, tiltCap);
 }
 
+function computeCenteringTranslation(position, velocity, edgeRatio, inCenterRegion) {
+    const predictedPosition = position + velocity * ASSIST_CENTER_LOOKAHEAD;
+    const captureBoost = inCenterRegion ? ASSIST_CENTER_CAPTURE_BOOST : 1;
+    const rawCorrection =
+        predictedPosition * ASSIST_CENTER_TRANSLATION_P * captureBoost +
+        velocity * ASSIST_CENTER_TRANSLATION_D;
+    const brakingBias = Math.sign(velocity) * Math.min(Math.abs(velocity) * ASSIST_CENTER_BRAKE_GAIN, 0.18);
+    const adaptiveMax = THREE.MathUtils.lerp(
+        ASSIST_CENTER_TRANSLATION_MAX * 0.72,
+        ASSIST_CENTER_TRANSLATION_MAX,
+        edgeRatio
+    );
+    return THREE.MathUtils.clamp(rawCorrection + brakingBias, -adaptiveMax, adaptiveMax);
+}
+
 function updatePulsePhase(timerValue, phaseOn) {
     if (timerValue > 0) {
         return { timer: timerValue - FIXED_TIME_STEP, phaseOn };
@@ -1530,6 +1850,19 @@ function updateTelemetry() {
     const frontDistance = getFrontObstacleDistance();
     const frontDistanceText = frontDistance === null ? '--' : `${frontDistance.toFixed(1)} m`;
     attitudeEuler.setFromQuaternion(drone.quaternion, 'YXZ');
+    const autonomyEnabledText = autonomy.enabled ? 'ON' : 'OFF';
+    const destinationText = autonomy.hasDestination
+        ? `(${autonomy.destinationX.toFixed(1)}, ${autonomy.destinationZ.toFixed(1)})`
+        : '--';
+    const pathStatusText = !autonomy.enabled
+        ? 'DISABLED'
+        : autonomy.isPlanning
+            ? 'PLANNING'
+            : autonomy.lastPlanError
+                ? 'NO ROUTE'
+                : autonomy.hasDestination
+                    ? `${autonomy.waypointPath.length} WAYPOINTS${autonomy.isDestinationReached() ? ' - ARRIVED' : ''}`
+                    : 'READY';
 
     telemetry.mode.textContent = autoBalance ? 'AUTO-BAL' : 'MANUAL';
     telemetry.assisted.textContent = assistedMode ? 'ON' : 'OFF';
@@ -1538,6 +1871,15 @@ function updateTelemetry() {
     }
     if (telemetry.frontDistance) {
         telemetry.frontDistance.textContent = frontDistanceText;
+    }
+    if (telemetry.autonomy) {
+        telemetry.autonomy.textContent = autonomyEnabledText;
+    }
+    if (telemetry.destination) {
+        telemetry.destination.textContent = destinationText;
+    }
+    if (telemetry.pathStatus) {
+        telemetry.pathStatus.textContent = pathStatusText;
     }
 
     const ballInside = isBallInsideTray();
@@ -1569,6 +1911,15 @@ function updateTelemetry() {
         }
         if (gameTelemetry.frontDistance) {
             gameTelemetry.frontDistance.textContent = frontDistanceText;
+        }
+        if (gameTelemetry.autonomy) {
+            gameTelemetry.autonomy.textContent = autonomyEnabledText;
+        }
+        if (gameTelemetry.destination) {
+            gameTelemetry.destination.textContent = destinationText;
+        }
+        if (gameTelemetry.pathStatus) {
+            gameTelemetry.pathStatus.textContent = pathStatusText;
         }
         gameTelemetry.altitude.textContent = `${drone.position.y.toFixed(2)} m`;
         gameTelemetry.speed.textContent = `${speed.toFixed(2)} m/s`;
@@ -1610,7 +1961,71 @@ function setOverlayVisible(visible) {
     overlay.classList.toggle('hidden', !visible);
 }
 
+function setOverlayMessage(message) {
+    if (overlayTitle) {
+        overlayTitle.textContent = message;
+    }
+}
+
+function setTrayKinematic() {
+    trayBody.type = CANNON.Body.KINEMATIC;
+    trayBody.mass = 0;
+    trayBody.linearDamping = 0;
+    trayBody.angularDamping = 0;
+    trayBody.updateMassProperties();
+}
+
+function setTrayDynamic() {
+    trayBody.type = CANNON.Body.DYNAMIC;
+    trayBody.mass = 6.5;
+    trayBody.linearDamping = 0.22;
+    trayBody.angularDamping = 0.35;
+    trayBody.updateMassProperties();
+    trayBody.wakeUp();
+}
+
+function triggerDroneCrash(impactVelocityX = 0, impactVelocityY = 0, impactVelocityZ = 0) {
+    if (droneCrashed) {
+        return;
+    }
+
+    droneCrashed = true;
+    autoBalance = false;
+    assistedMode = false;
+    centerHoldActive = false;
+    correctionActive = false;
+    correctionArrow.visible = false;
+    correctionArrowScale = 0;
+    correctionArrow.scale.setScalar(0.001);
+    assistPulseTilt.roll = 0;
+    assistPulseTilt.pitch = 0;
+    assistPulseCycle.rollOn = false;
+    assistPulseCycle.pitchOn = false;
+    assistPulseCycle.rollTimer = 0;
+    assistPulseCycle.pitchTimer = 0;
+    windImpulse.x = 0;
+    windImpulse.y = 0;
+    windImpulse.z = 0;
+    windImpulse.roll = 0;
+    windImpulse.pitch = 0;
+    windImpulse.yaw = 0;
+
+    autonomy.reset();
+    clearPathVisualization();
+
+    setTrayDynamic();
+    trayBody.velocity.set(impactVelocityX, Math.min(-0.8, impactVelocityY - 1.6), impactVelocityZ);
+    trayBody.angularVelocity.set(
+        THREE.MathUtils.clamp(-impactVelocityZ * 0.28, -2.4, 2.4),
+        THREE.MathUtils.clamp(impactVelocityX * 0.18, -2.0, 2.0),
+        THREE.MathUtils.clamp(impactVelocityX * 0.24, -2.4, 2.4)
+    );
+    setOverlayMessage('The drone crashed');
+    setOverlayVisible(true);
+}
+
 function resetSimulation() {
+    droneCrashed = false;
     movement.x = 0;
     movement.z = 0;
     movement.y = 0;
@@ -1637,6 +2052,7 @@ function resetSimulation() {
     trayBody.velocity.set(0, 0, 0);
     trayBody.angularVelocity.set(0, 0, 0);
     trayBody.quaternion.set(0, 0, 0, 1);
+    setTrayKinematic();
 
     ballBody.position.set(0, DRONE_HEIGHT + TRAY_OFFSET_Y + 0.25, 0);
     ballBody.velocity.set(0, 0, 0);
@@ -1656,6 +2072,9 @@ function resetSimulation() {
     windImpulse.roll = 0;
     windImpulse.pitch = 0;
     windImpulse.yaw = 0;
+    autonomy.reset();
+    clearPathVisualization();
+    setOverlayMessage('The ball is out of the tray');
     setOverlayVisible(false);
 }
 
@@ -1722,23 +2141,23 @@ function applyCenterLockAssist() {
     }
 
     const desiredLocalVelocityX = THREE.MathUtils.clamp(
-        (-ballLocalPosition.x * 1.65) - (ballLocalVelocity.x * 0.72),
-        -0.12,
-        0.12
+        (-ballLocalPosition.x * CENTER_LOCK_POSITION_GAIN) - (ballLocalVelocity.x * CENTER_LOCK_VELOCITY_GAIN),
+        -CENTER_LOCK_MAX_VELOCITY,
+        CENTER_LOCK_MAX_VELOCITY
     );
     const desiredLocalVelocityZ = THREE.MathUtils.clamp(
-        (-ballLocalPosition.z * 1.65) - (ballLocalVelocity.z * 0.72),
-        -0.12,
-        0.12
+        (-ballLocalPosition.z * CENTER_LOCK_POSITION_GAIN) - (ballLocalVelocity.z * CENTER_LOCK_VELOCITY_GAIN),
+        -CENTER_LOCK_MAX_VELOCITY,
+        CENTER_LOCK_MAX_VELOCITY
     );
 
     ballLocalVelocity.x = THREE.MathUtils.lerp(ballLocalVelocity.x, desiredLocalVelocityX, 1 - CENTER_LOCK_DAMPING);
     ballLocalVelocity.z = THREE.MathUtils.lerp(ballLocalVelocity.z, desiredLocalVelocityZ, 1 - CENTER_LOCK_DAMPING);
 
-    if (Math.abs(ballLocalPosition.x) < 0.008 && Math.abs(ballLocalVelocity.x) < 0.01) {
+    if (Math.abs(ballLocalPosition.x) < CENTER_LOCK_SNAP_POSITION && Math.abs(ballLocalVelocity.x) < CENTER_LOCK_SNAP_VELOCITY) {
         ballLocalVelocity.x = 0;
     }
-    if (Math.abs(ballLocalPosition.z) < 0.008 && Math.abs(ballLocalVelocity.z) < 0.01) {
+    if (Math.abs(ballLocalPosition.z) < CENTER_LOCK_SNAP_POSITION && Math.abs(ballLocalVelocity.z) < CENTER_LOCK_SNAP_VELOCITY) {
         ballLocalVelocity.z = 0;
     }
 
@@ -1802,6 +2221,15 @@ if (resetButton) {
 }
 
 function updateMovementState() {
+    autonomy.updatePilotOverride({
+        roll: input.roll,
+        pitch: input.pitch,
+        moveX: input.moveX,
+        moveZ: input.moveZ,
+        yaw: input.yaw,
+        throttle: input.throttle,
+    });
+
     const edgeRatio = Math.max(
         Math.abs(ballLocalPosition.x) / Math.max(0.001, traySafeHalf),
         Math.abs(ballLocalPosition.z) / Math.max(0.001, traySafeHalf)
@@ -2001,16 +2429,8 @@ function updateMovementState() {
             targetMovement.x = 0;
             targetMovement.z = 0;
         } else {
-            const centerRight = THREE.MathUtils.clamp(
-                (ballLocalPosition.x * ASSIST_CENTER_TRANSLATION_P + ballLocalVelocity.x * ASSIST_CENTER_TRANSLATION_D),
-                -ASSIST_CENTER_TRANSLATION_MAX,
-                ASSIST_CENTER_TRANSLATION_MAX
-            );
-            const centerForward = THREE.MathUtils.clamp(
-                (ballLocalPosition.z * ASSIST_CENTER_TRANSLATION_P + ballLocalVelocity.z * ASSIST_CENTER_TRANSLATION_D),
-                -ASSIST_CENTER_TRANSLATION_MAX,
-                ASSIST_CENTER_TRANSLATION_MAX
-            );
+            const centerRight = computeCenteringTranslation(ballLocalPosition.x, ballLocalVelocity.x, edgeRatio, inCenterRegion);
+            const centerForward = computeCenteringTranslation(ballLocalPosition.z, ballLocalVelocity.z, edgeRatio, inCenterRegion);
             let centerScale = pilotPlanarNeutral ? 1.35 : 0;
             if (!pilotPlanarNeutral) {
                 const edgeRescueWeight = THREE.MathUtils.clamp((edgeRatio - EDGE_RESCUE_START) / (1 - EDGE_RESCUE_START), 0, 1);
@@ -2035,13 +2455,43 @@ function updateMovementState() {
         }
     }
 
+    const autonomyWeight = autonomy.enabled && autonomy.hasDestination && autonomy.waypointPath.length > 0
+        ? THREE.MathUtils.clamp(1 - autonomy.overrideBlendFactor, 0, 1)
+        : 0;
+    const autonomyActive = autonomyWeight > 0;
+
+    if (autonomyActive) {
+        const autonomousCommands = autonomy.calculateMovementCommands(
+            trayBody.position.x,
+            trayBody.position.z,
+            movement.yaw,
+            TILT_LIMIT,
+            movement
+        );
+        const autonomousRight = autonomousCommands.right ?? 0;
+        const autonomousPitchInput = THREE.MathUtils.clamp(
+            -((autonomousCommands.pitch ?? 0) / Math.max(0.0001, TILT_LIMIT)),
+            -1,
+            1
+        );
+        const autonomousForward =
+            (autonomousCommands.forward ?? autonomousPitchInput) * MOVE_SPEED * PITCH_ROLL_MOVE_GAIN;
+
+        rightCommand = THREE.MathUtils.lerp(rightCommand, autonomousRight, autonomyWeight);
+        forwardCommand = THREE.MathUtils.lerp(forwardCommand, autonomousForward, autonomyWeight);
+        targetMovement.roll = THREE.MathUtils.lerp(targetMovement.roll, autonomousCommands.roll, autonomyWeight);
+        targetMovement.pitch = THREE.MathUtils.lerp(targetMovement.pitch, autonomousCommands.pitch, autonomyWeight);
+        targetMovement.yawRate = THREE.MathUtils.lerp(targetMovement.yawRate, autonomousCommands.yaw, autonomyWeight);
+        targetMovement.y = THREE.MathUtils.lerp(targetMovement.y, autonomousCommands.throttle, autonomyWeight);
+    }
+
     const commandYaw = movement.yaw + targetMovement.yawRate * FIXED_TIME_STEP;
     const cosYaw = Math.cos(commandYaw);
     const sinYaw = Math.sin(commandYaw);
     targetMovement.x = (rightCommand * cosYaw - forwardCommand * sinYaw) * safetyScale;
     targetMovement.z = (-rightCommand * sinYaw - forwardCommand * cosYaw) * safetyScale;
 
-    if (assistedMode && pilotPlanarNeutral && inCenterRegion) {
+    if (assistedMode && pilotPlanarNeutral && inCenterRegion && !autonomyActive) {
         targetMovement.x = 0;
         targetMovement.z = 0;
     }
@@ -2085,7 +2535,7 @@ function updateMovementState() {
     movement.yawRate = THREE.MathUtils.lerp(movement.yawRate, targetMovement.yawRate, MOVE_LERP);
     movement.yaw += movement.yawRate * FIXED_TIME_STEP;
 
-    if (assistedMode && pilotPlanarNeutral) {
+    if (assistedMode && pilotPlanarNeutral && !autonomyActive) {
         movement.x = THREE.MathUtils.lerp(movement.x, 0, ASSIST_STOP_DAMPING);
         movement.z = THREE.MathUtils.lerp(movement.z, 0, ASSIST_STOP_DAMPING);
         if (!assistPulseCycle.rollOn) {
@@ -2096,7 +2546,7 @@ function updateMovementState() {
         }
     }
 
-    if (assistedMode && centerHoldActive) {
+    if (assistedMode && centerHoldActive && !autonomyActive) {
         movement.x = THREE.MathUtils.lerp(movement.x, 0, CENTER_HOLD_DAMPING);
         movement.z = THREE.MathUtils.lerp(movement.z, 0, CENTER_HOLD_DAMPING);
         movement.roll = THREE.MathUtils.lerp(movement.roll, 0, CENTER_HOLD_DAMPING);
@@ -2105,7 +2555,7 @@ function updateMovementState() {
         targetMovement.pitch = 0;
     }
 
-    if (assistedMode && pilotPlanarNeutral && inCenterRegion) {
+    if (assistedMode && pilotPlanarNeutral && inCenterRegion && !autonomyActive) {
         movement.x = THREE.MathUtils.lerp(movement.x, 0, CENTER_HOLD_TRANSLATION_DAMPING);
         movement.z = THREE.MathUtils.lerp(movement.z, 0, CENTER_HOLD_TRANSLATION_DAMPING);
         if (Math.abs(movement.x) < CENTER_HOLD_TRANSLATION_SNAP) {
@@ -2116,7 +2566,7 @@ function updateMovementState() {
         }
     }
 
-    if (shouldAutoLevel) {
+    if (shouldAutoLevel && !autonomyActive) {
         movement.roll = THREE.MathUtils.lerp(movement.roll, 0, ATTITUDE_RETURN_LERP);
         movement.pitch = THREE.MathUtils.lerp(movement.pitch, 0, ATTITUDE_RETURN_LERP);
     }
@@ -2157,11 +2607,15 @@ function handleGamepadToggles() {
     if (!gamepad) {
         prevGamepadYPressed = false;
         prevGamepadXPressed = false;
+        prevGamepadLBPressed = false;
+        prevGamepadRBPressed = false;
         return;
     }
 
     const yPressed = Boolean(gamepad.buttons?.[3]?.pressed);
     const xPressed = Boolean(gamepad.buttons?.[2]?.pressed);
+    const lbPressed = Boolean(gamepad.buttons?.[4]?.pressed);
+    const rbPressed = Boolean(gamepad.buttons?.[5]?.pressed);
 
     if (yPressed && !prevGamepadYPressed) {
         assistedMode = !assistedMode;
@@ -2171,11 +2625,25 @@ function handleGamepadToggles() {
         toggleEnvironmentMode();
     }
 
+    if (lbPressed && !prevGamepadLBPressed) {
+        autonomy.setEnabled(!autonomy.enabled);
+    }
+
+    if (rbPressed && !prevGamepadRBPressed) {
+        openDestinationModal();
+    }
+
     prevGamepadYPressed = yPressed;
     prevGamepadXPressed = xPressed;
+    prevGamepadLBPressed = lbPressed;
+    prevGamepadRBPressed = rbPressed;
 }
 
 function updateTrayBody() {
+    if (droneCrashed) {
+        return;
+    }
+
     const desiredY = Math.max(
         trayBody.position.y + movement.y * FIXED_TIME_STEP,
         MIN_ALTITUDE + TRAY_OFFSET_Y
@@ -2200,14 +2668,17 @@ function updateTrayBody() {
         const overlapsZ = Math.abs(targetZ - obstacle.z) <= (trayHalfZ + obstacle.hz + OBSTACLE_COLLISION_PADDING);
 
         if (overlapsX && overlapsY && overlapsZ) {
-            targetX = trayBody.position.x;
-            targetZ = trayBody.position.z;
-            movement.x *= 0.18;
-            movement.z *= 0.18;
-            targetMovement.x = 0;
-            targetMovement.z = 0;
+            triggerDroneCrash(
+                trayBody.velocity.x,
+                trayBody.velocity.y,
+                trayBody.velocity.z
+            );
             break;
         }
+    }
+
+    if (droneCrashed) {
+        return;
     }
 
     trayPos.set(targetX, targetY, targetZ);
@@ -2349,6 +2820,173 @@ function renderStereoMobileView() {
     renderer.autoClear = previousAutoClear;
 }
 
+/**
+ * Autonomous Destination Modal Handler
+ */
+function openDestinationModal() {
+    if (destinationModal) {
+        destinationModal.classList.remove('hidden');
+        destinationModal.setAttribute('aria-hidden', 'false');
+        if (destinationXInput) {
+            destinationXInput.value = autonomy.hasDestination ? autonomy.destinationX.toFixed(1) : trayBody.position.x.toFixed(1);
+            destinationXInput.focus();
+            destinationXInput.select();
+        }
+        if (destinationZInput) {
+            destinationZInput.value = autonomy.hasDestination ? autonomy.destinationZ.toFixed(1) : trayBody.position.z.toFixed(1);
+        }
+    }
+}
+
+function closeDestinationModal() {
+    if (destinationModal) {
+        destinationModal.classList.add('hidden');
+        destinationModal.setAttribute('aria-hidden', 'true');
+    }
+}
+
+function setDestinationFromModal() {
+    if (!destinationXInput || !destinationZInput) {
+        alert('Destination inputs are not available.');
+        return;
+    }
+
+    const destX = parseFloat(destinationXInput.value);
+    const destZ = parseFloat(destinationZInput.value);
+
+    if (Number.isNaN(destX) || Number.isNaN(destZ)) {
+        alert('Please enter valid coordinates');
+        return;
+    }
+
+    if (setAutonomousDestination(destX, destZ)) {
+        closeDestinationModal();
+    }
+}
+
+function generateRandomDestination() {
+    ensureNavigationGrid();
+
+    const attempts = 50;
+    for (let i = 0; i < attempts; i++) {
+        const destX = Math.random() * 200 - 100;
+        const destZ = Math.random() * 200 - 100;
+
+        if (navigationGrid.isPointWalkable(destX, destZ)) {
+            if (destinationXInput) {
+                destinationXInput.value = destX.toFixed(1);
+            }
+            if (destinationZInput) {
+                destinationZInput.value = destZ.toFixed(1);
+            }
+            return;
+        }
+    }
+
+    if (destinationXInput) {
+        destinationXInput.value = '0';
+    }
+    if (destinationZInput) {
+        destinationZInput.value = '0';
+    }
+}
+
+function setDestinationToCenter() {
+    if (destinationXInput) {
+        destinationXInput.value = '0';
+    }
+    if (destinationZInput) {
+        destinationZInput.value = '0';
+    }
+}
+
+function handleMiniMapDestinationPick(event) {
+    if (!miniMapCanvas || !miniMapContext || isMobileFrontView) {
+        return;
+    }
+
+    const rect = miniMapCanvas.getBoundingClientRect();
+    const canvasX = ((event.clientX - rect.left) / rect.width) * miniMapCanvas.width;
+    const canvasY = ((event.clientY - rect.top) / rect.height) * miniMapCanvas.height;
+    const centerX = miniMapCanvas.width * 0.5;
+    const centerY = miniMapCanvas.height * 0.5;
+    const radius = Math.min(miniMapCanvas.width, miniMapCanvas.height) * 0.48;
+    const deltaX = canvasX - centerX;
+    const deltaY = canvasY - centerY;
+
+    if (Math.hypot(deltaX, deltaY) > radius) {
+        return;
+    }
+
+    const pixelsPerMeter = radius / MINIMAP_RANGE;
+    const targetX = trayBody.position.x + deltaX / pixelsPerMeter;
+    const targetZ = trayBody.position.z + deltaY / pixelsPerMeter;
+    setAutonomousDestination(targetX, targetZ);
+}
+
+/**
+ * Initialize Autonomous System UI Event Listeners
+ */
+function initializeAutonomousUI() {
+    const setDestBtn = document.getElementById('set-destination');
+    const cancelBtn = document.getElementById('cancel-modal');
+    const randomBtn = document.getElementById('random-dest');
+    const centerBtn = document.getElementById('center-world');
+
+    if (setDestBtn) {
+        setDestBtn.addEventListener('click', setDestinationFromModal);
+    }
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', closeDestinationModal);
+    }
+    if (randomBtn) {
+        randomBtn.addEventListener('click', generateRandomDestination);
+    }
+    if (centerBtn) {
+        centerBtn.addEventListener('click', setDestinationToCenter);
+    }
+    if (openDestinationButton) {
+        openDestinationButton.addEventListener('click', () => {
+            setWorldPickMode(false);
+            openDestinationModal();
+        });
+    }
+    if (toggleWorldPickButton) {
+        toggleWorldPickButton.addEventListener('click', () => {
+            if (destinationModal && !destinationModal.classList.contains('hidden')) {
+                closeDestinationModal();
+            }
+            setWorldPickMode(!worldPickMode);
+        });
+    }
+    if (clearDestinationButton) {
+        clearDestinationButton.addEventListener('click', clearAutonomousRoute);
+    }
+    if (miniMapCanvas) {
+        miniMapCanvas.addEventListener('click', handleMiniMapDestinationPick);
+    }
+    if (destinationXInput && destinationZInput) {
+        const submitOnEnter = (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                setDestinationFromModal();
+            }
+        };
+        destinationXInput.addEventListener('keydown', submitOnEnter);
+        destinationZInput.addEventListener('keydown', submitOnEnter);
+    }
+
+    if (destinationModal) {
+        destinationModal.addEventListener('click', (event) => {
+            if (event.target === destinationModal) {
+                closeDestinationModal();
+            }
+        });
+    }
+
+    updateWorldPickUi();
+}
+
 function animate() {
     requestAnimationFrame(animate);
 
@@ -2375,6 +3013,10 @@ function animate() {
     updateWindImpulse();
     updateWindIndicator();
 
+    if (autonomy.enabled && autonomy.hasDestination && autonomy.isPlanning && navigationGrid) {
+        autonomy.planPath(trayBody.position.x, trayBody.position.z, navigationGrid);
+    }
+
     updateMovementState();
     updateTrayBody();
 
@@ -2385,15 +3027,26 @@ function animate() {
     applyCenterLockAssist();
     updateBallLocalState();
 
-    if (isBallInsideTray()) {
+    if (droneCrashed) {
+        setOverlayVisible(true);
+    }
+
+    if (!droneCrashed && isBallInsideTray()) {
         outOfTrayTime = 0;
         setOverlayVisible(false);
     } else {
         outOfTrayTime += FIXED_TIME_STEP;
-        setOverlayVisible(outOfTrayTime >= OUT_OF_TRAY_GRACE_TIME);
+        if (!droneCrashed) {
+            setOverlayVisible(outOfTrayTime >= OUT_OF_TRAY_GRACE_TIME);
+        }
+        if (!droneCrashed && autonomy.enabled && outOfTrayTime >= OUT_OF_TRAY_GRACE_TIME) {
+            autonomy.setEnabled(false);
+            clearPathVisualization();
+        }
     }
 
     syncVisuals();
+    updatePathVisualization();
     updateCamera();
     drawMiniMap();
     updateTelemetry();
