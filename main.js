@@ -97,6 +97,9 @@ const ENV_MODE_CITY = 'city';
 const ENV_MODE_MOUNTAIN = 'mountain';
 const OBSTACLE_COLLISION_PADDING = 0.05;
 const FRONT_SENSOR_MAX_RANGE = 120;
+const MINIMAP_SIZE = 220;
+const MINIMAP_RANGE = 38;
+const MINIMAP_OBSTACLE_LIMIT = 220;
 
 const currentPage = window.location.pathname.toLowerCase();
 const isMobileFrontView = currentPage.endsWith('/mobile.html') || currentPage.endsWith('mobile.html');
@@ -848,6 +851,8 @@ const gamepadGlyphs = document.getElementById('gamepad-glyphs');
 const activeInputLabel = document.getElementById('active-input-label');
 const fpvDivider = document.getElementById('fpv-divider');
 const vrMask = document.getElementById('vr-mask');
+const miniMapCanvas = document.getElementById('mini-map-canvas');
+const miniMapContext = miniMapCanvas ? miniMapCanvas.getContext('2d') : null;
 const gameTelemetry = {
     mode: document.getElementById('gh-mode'),
     assisted: document.getElementById('gh-assisted'),
@@ -874,6 +879,118 @@ const correctionArrowDirection = new THREE.Vector3(1, 0, 0);
 const correctionUpAxis = new THREE.Vector3(0, 1, 0);
 const frontSensorOrigin = new THREE.Vector3();
 const frontSensorDirection = new THREE.Vector3();
+const minimapPoint = new THREE.Vector2();
+
+function drawMiniMap() {
+    if (!miniMapCanvas || !miniMapContext) {
+        return;
+    }
+
+    if (miniMapCanvas.width !== MINIMAP_SIZE || miniMapCanvas.height !== MINIMAP_SIZE) {
+        miniMapCanvas.width = MINIMAP_SIZE;
+        miniMapCanvas.height = MINIMAP_SIZE;
+    }
+
+    const context = miniMapContext;
+    const width = miniMapCanvas.width;
+    const height = miniMapCanvas.height;
+    const centerX = width * 0.5;
+    const centerY = height * 0.5;
+    const radius = Math.min(width, height) * 0.48;
+    const pixelsPerMeter = radius / MINIMAP_RANGE;
+
+    context.clearRect(0, 0, width, height);
+
+    context.save();
+    context.beginPath();
+    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    context.clip();
+
+    const gradient = context.createRadialGradient(centerX, centerY, radius * 0.15, centerX, centerY, radius);
+    gradient.addColorStop(0, 'rgba(20, 66, 84, 0.95)');
+    gradient.addColorStop(1, 'rgba(8, 20, 28, 0.98)');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, width, height);
+
+    context.strokeStyle = 'rgba(160, 230, 255, 0.18)';
+    context.lineWidth = 1;
+    const ringSteps = [0.33, 0.66, 1];
+    for (let index = 0; index < ringSteps.length; index += 1) {
+        context.beginPath();
+        context.arc(centerX, centerY, radius * ringSteps[index], 0, Math.PI * 2);
+        context.stroke();
+    }
+
+    context.strokeStyle = 'rgba(180, 230, 255, 0.2)';
+    context.beginPath();
+    context.moveTo(centerX - radius, centerY);
+    context.lineTo(centerX + radius, centerY);
+    context.moveTo(centerX, centerY - radius);
+    context.lineTo(centerX, centerY + radius);
+    context.stroke();
+
+    const droneX = trayBody.position.x;
+    const droneZ = trayBody.position.z;
+
+    let drawnObstacles = 0;
+    for (let index = 0; index < activeObstacleColliders.length; index += 1) {
+        if (drawnObstacles >= MINIMAP_OBSTACLE_LIMIT) {
+            break;
+        }
+
+        const obstacle = activeObstacleColliders[index];
+        const offsetX = obstacle.x - droneX;
+        const offsetZ = obstacle.z - droneZ;
+        const planarDistance = Math.hypot(offsetX, offsetZ);
+        if (planarDistance > MINIMAP_RANGE + Math.max(obstacle.hx, obstacle.hz)) {
+            continue;
+        }
+
+        minimapPoint.set(offsetX, offsetZ).multiplyScalar(pixelsPerMeter);
+        const drawX = centerX + minimapPoint.x;
+        const drawY = centerY + minimapPoint.y;
+        const obstacleW = Math.max(2, obstacle.hx * 2 * pixelsPerMeter);
+        const obstacleH = Math.max(2, obstacle.hz * 2 * pixelsPerMeter);
+
+        if (environmentMode === ENV_MODE_CITY) {
+            context.fillStyle = 'rgba(183, 214, 238, 0.74)';
+            context.fillRect(drawX - obstacleW * 0.5, drawY - obstacleH * 0.5, obstacleW, obstacleH);
+        } else {
+            context.fillStyle = 'rgba(168, 198, 146, 0.72)';
+            context.beginPath();
+            context.ellipse(drawX, drawY, obstacleW * 0.58, obstacleH * 0.58, 0, 0, Math.PI * 2);
+            context.fill();
+        }
+
+        drawnObstacles += 1;
+    }
+
+    context.restore();
+
+    context.strokeStyle = 'rgba(196, 238, 255, 0.5)';
+    context.lineWidth = 2;
+    context.beginPath();
+    context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+    context.stroke();
+
+    context.save();
+    context.translate(centerX, centerY);
+    context.rotate(-movement.yaw);
+    context.fillStyle = 'rgba(255, 215, 122, 0.95)';
+    context.beginPath();
+    context.moveTo(0, -12);
+    context.lineTo(8, 10);
+    context.lineTo(0, 5);
+    context.lineTo(-8, 10);
+    context.closePath();
+    context.fill();
+    context.restore();
+
+    context.fillStyle = 'rgba(220, 245, 255, 0.9)';
+    context.font = '11px Arial';
+    context.textAlign = 'left';
+    context.fillText(`${Math.round(MINIMAP_RANGE)}m`, 10, height - 10);
+}
 
 function createTrayCoordinateSystem(axisHalfSize) {
     const group = new THREE.Group();
@@ -2242,6 +2359,7 @@ function animate() {
 
         updateBallLocalState();
         syncVisuals();
+        drawMiniMap();
         updateTelemetry();
         if (mobileStereoFpvEnabled) {
             renderStereoMobileView();
@@ -2277,6 +2395,7 @@ function animate() {
 
     syncVisuals();
     updateCamera();
+    drawMiniMap();
     updateTelemetry();
     publishMirrorState();
 
