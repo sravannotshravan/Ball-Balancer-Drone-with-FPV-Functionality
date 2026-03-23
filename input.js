@@ -50,12 +50,14 @@ function handleKeyboardEvent(event, pressed) {
 }
 
 function getKeyboardAxes() {
-    const moveX = (keyState.KeyD ? 1 : 0) - (keyState.KeyA ? 1 : 0);
-    const moveZ = (keyState.KeyS ? 1 : 0) - (keyState.KeyW ? 1 : 0);
+    const moveX = 0;
+    const moveZ = 0;
+    const yaw = (keyState.KeyA ? 1 : 0) - (keyState.KeyD ? 1 : 0);
+    const throttle = (keyState.KeyW ? 1 : 0) - (keyState.KeyS ? 1 : 0);
     const roll = (keyState.ArrowLeft ? 1 : 0) - (keyState.ArrowRight ? 1 : 0);
     const pitch = (keyState.ArrowUp ? 1 : 0) - (keyState.ArrowDown ? 1 : 0);
 
-    return { moveX, moveZ, roll, pitch };
+    return { moveX, moveZ, yaw, throttle, roll, pitch };
 }
 
 function getGamepadAxes() {
@@ -80,6 +82,8 @@ function recomputeUnifiedInput() {
     const keyboardActive =
         keyboard.moveX !== 0 ||
         keyboard.moveZ !== 0 ||
+        keyboard.yaw !== 0 ||
+        keyboard.throttle !== 0 ||
         keyboard.roll !== 0 ||
         keyboard.pitch !== 0;
 
@@ -99,8 +103,8 @@ function recomputeUnifiedInput() {
     input.moveZ = clampInput(keyboard.moveZ);
     input.roll = clampInput(keyboard.roll + gamepad.roll);
     input.pitch = clampInput(keyboard.pitch + gamepad.pitch);
-    input.yaw = clampInput(gamepad.yaw);
-    input.throttle = clampInput(gamepad.throttle);
+    input.yaw = clampInput(keyboard.yaw + gamepad.yaw);
+    input.throttle = clampInput(keyboard.throttle + gamepad.throttle);
 }
 
 document.addEventListener('keydown', (event) => {

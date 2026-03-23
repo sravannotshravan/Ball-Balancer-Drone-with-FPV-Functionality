@@ -4,18 +4,18 @@ import { createDrone } from './drone.js';
 import { activeInputSource, input, updateInput } from './input.js';
 
 const FIXED_TIME_STEP = 1 / 60;
-const MOVE_SPEED = 2.1;
+const MOVE_SPEED = 4.0;
 const TILT_LIMIT = 0.26;
 const DRONE_HEIGHT = 2;
 const TRAY_OFFSET_Y = 0.22;
-const YAW_SPEED = 0.7;
-const VERTICAL_SPEED = 0.9;
+const YAW_SPEED = 1.2;
+const VERTICAL_SPEED = 1.6;
 const MIN_ALTITUDE = 0.8;
 const MAX_ALTITUDE = 8.5;
 const MAX_VERTICAL_STEP = 0.02;
 const STICK_NEUTRAL_THRESHOLD = 0.08;
 const ATTITUDE_RETURN_LERP = 0.18;
-const PITCH_ROLL_MOVE_GAIN = 0.6;
+const PITCH_ROLL_MOVE_GAIN = 0.95;
 const EDGE_CONTACT_TOLERANCE = 0.006;
 const OUT_OF_TRAY_GRACE_TIME = 0.18;
 const CAMERA_LERP = 0.08;
@@ -28,9 +28,9 @@ const ASSIST_STICK_BLEND = 0.16;
 const ASSIST_CENTER_VEL_DEADBAND = 0.14;
 const ASSIST_MICRO_TILT = 0.015;
 const ASSIST_VEL_MICRO_GAIN = 0.06;
-const ASSIST_CENTER_TRANSLATION_P = 0.55;
-const ASSIST_CENTER_TRANSLATION_D = 0.28;
-const ASSIST_CENTER_TRANSLATION_MAX = 0.35;
+const ASSIST_CENTER_TRANSLATION_P = 0.95;
+const ASSIST_CENTER_TRANSLATION_D = 0.55;
+const ASSIST_CENTER_TRANSLATION_MAX = 0.55;
 const ASSIST_INPUT_NEUTRAL = 0.08;
 const ASSIST_CENTER_HOLD_VEL = 0.18;
 const ASSIST_STOP_DAMPING = 0.34;
@@ -54,9 +54,18 @@ const EDGE_BOUNCE_ZONE = 0.03;
 const EDGE_BOUNCE_MIN_SPEED = 0.24;
 const EDGE_BOUNCE_RESTITUTION = 0.48;
 const EDGE_BOUNCE_COOLDOWN = 0.08;
-const CENTER_LOCK_SPEED = 0.28;
+const CENTER_LOCK_SPEED = 0.42;
 const CENTER_LOCK_TRANSLATION = 0.02;
-const CENTER_LOCK_DAMPING = 0.16;
+const CENTER_LOCK_DAMPING = 0.04;
+const WIND_DRAG_TRIGGER_RADIUS = 140;
+const WIND_PULSE_DECAY = 0.84;
+const WIND_PULSE_MIN = 0.0015;
+const WIND_FORCE_GAIN = 0.0024;
+const WIND_TILT_GAIN = 0.0012;
+const WIND_VERTICAL_GAIN = 0.0006;
+const WIND_MAX_FORCE = 0.12;
+const WIND_MAX_TILT = 0.055;
+const WIND_MAX_YAW = 0.05;
 const ASSIST_MICRO_TILT_MIN = 0.02;
 const ASSIST_MICRO_TILT_MAX = 0.09;
 const ASSIST_CENTER_KP = 0.52;
@@ -258,6 +267,59 @@ function createObstacleBodies(colliderDefs, material) {
     });
 }
 
+function showWindIndicator(clickX, clickY, targetX, targetY, strength) {
+    if (!windIndicator || !windIndicatorLine || !windIndicatorHead || !windIndicatorLabel) {
+        return;
+    }
+
+    const deltaX = targetX - clickX;
+    const deltaY = targetY - clickY;
+    const length = Math.max(32, Math.hypot(deltaX, deltaY));
+    const angle = Math.atan2(deltaY, deltaX);
+
+    windIndicator.style.left = `${clickX}px`;
+    windIndicator.style.top = `${clickY}px`;
+    windIndicator.style.width = `${length}px`;
+    windIndicator.style.transform = `rotate(${angle}rad)`;
+    windIndicator.style.opacity = `${THREE.MathUtils.clamp(0.45 + strength * 0.35, 0.45, 1)}`;
+    windIndicator.classList.remove('hidden');
+    windIndicatorLine.style.width = `${Math.max(24, length - 18)}px`;
+    windIndicatorHead.style.left = `${Math.max(14, length - 18)}px`;
+    windIndicatorLife = 1;
+    windIndicatorAngle = angle;
+    windIndicatorLength = length;
+    windIndicatorLabel.textContent = `WIND ${Math.round(strength * 100)}%`;
+}
+
+function handleWindClick(event) {
+    if (event.button !== 0) {
+        return;
+    }
+
+    camera.updateMatrixWorld(true);
+    drone.updateMatrixWorld(true);
+    windScreenPosition.copy(drone.position).project(camera);
+
+    if (windScreenPosition.z < -1 || windScreenPosition.z > 1) {
+        return;
+    }
+
+    const droneScreenX = (windScreenPosition.x * 0.5 + 0.5) * window.innerWidth;
+    const droneScreenY = (-windScreenPosition.y * 0.5 + 0.5) * window.innerHeight;
+    const deltaX = droneScreenX - event.clientX;
+    const deltaY = droneScreenY - event.clientY;
+    const distance = Math.hypot(deltaX, deltaY);
+    const strength = THREE.MathUtils.clamp(distance / 260, 0.35, 1.45);
+
+    if (distance < 4) {
+        return;
+    }
+
+    injectWindPulse(deltaX, deltaY, strength);
+    showWindIndicator(event.clientX, event.clientY, droneScreenX, droneScreenY, strength);
+    event.preventDefault();
+}
+
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xb7d0e8);
 
@@ -271,7 +333,31 @@ world.allowSleep = false;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.domElement.style.touchAction = 'none';
 document.body.appendChild(renderer.domElement);
+
+let windIndicator = null;
+let windIndicatorLine = null;
+let windIndicatorHead = null;
+let windIndicatorLabel = null;
+let windIndicatorLife = 0;
+let windIndicatorAngle = 0;
+let windIndicatorLength = 0;
+
+windIndicator = document.createElement('div');
+windIndicator.className = 'wind-indicator hidden';
+windIndicatorLine = document.createElement('div');
+windIndicatorLine.className = 'wind-indicator-line';
+windIndicatorHead = document.createElement('div');
+windIndicatorHead.className = 'wind-indicator-head';
+windIndicatorLabel = document.createElement('div');
+windIndicatorLabel.className = 'wind-indicator-label';
+windIndicatorLabel.textContent = 'WIND';
+windIndicator.appendChild(windIndicatorLine);
+windIndicator.appendChild(windIndicatorHead);
+windIndicator.appendChild(windIndicatorLabel);
+document.body.appendChild(windIndicator);
+window.addEventListener('pointerdown', handleWindClick, { passive: false });
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 500);
 camera.position.set(0, 4, 8);
@@ -495,6 +581,14 @@ let correctionActive = false;
 let environmentMode = ENV_MODE_CITY;
 let mobileStereoFpvEnabled = false;
 let lastMobileTapTime = 0;
+const windImpulse = {
+    x: 0,
+    y: 0,
+    z: 0,
+    roll: 0,
+    pitch: 0,
+    yaw: 0,
+};
 
 const MIRROR_STATE_CHANNEL_NAME = 'drones-project-mirror-state';
 const MIRROR_STATE_STORAGE_KEY = 'drones-project-mirror-state';
@@ -988,6 +1082,75 @@ async function updateMobileViewAddressDisplay() {
     }
 }
 
+const windScreenPosition = new THREE.Vector3();
+
+function injectWindPulse(deltaX, deltaY, intensity = 1) {
+    const dragMagnitude = Math.hypot(deltaX, deltaY);
+    const pulseStrength = THREE.MathUtils.clamp(dragMagnitude / 140, 0, 1.5) * intensity;
+
+    if (pulseStrength <= 0) {
+        return;
+    }
+
+    const dirX = deltaX / dragMagnitude;
+    const dirY = deltaY / dragMagnitude;
+    const sideGust = dirX * pulseStrength * WIND_FORCE_GAIN * 72;
+    const forwardGust = dirY * pulseStrength * WIND_FORCE_GAIN * 72;
+    const verticalGust = dirY * pulseStrength * WIND_VERTICAL_GAIN * 20;
+    const rollGust = (Math.random() - 0.5) * pulseStrength * WIND_TILT_GAIN * 54;
+    const pitchGust = (Math.random() - 0.5) * pulseStrength * WIND_TILT_GAIN * 54;
+    const yawGust = (Math.random() - 0.5) * pulseStrength * WIND_TILT_GAIN * 28;
+
+    windImpulse.x = THREE.MathUtils.clamp(windImpulse.x + sideGust, -WIND_MAX_FORCE, WIND_MAX_FORCE);
+    windImpulse.z = THREE.MathUtils.clamp(windImpulse.z + forwardGust, -WIND_MAX_FORCE, WIND_MAX_FORCE);
+    windImpulse.y = THREE.MathUtils.clamp(windImpulse.y + verticalGust, -WIND_MAX_FORCE * 0.5, WIND_MAX_FORCE * 0.5);
+    windImpulse.roll = THREE.MathUtils.clamp(windImpulse.roll + rollGust, -WIND_MAX_TILT, WIND_MAX_TILT);
+    windImpulse.pitch = THREE.MathUtils.clamp(windImpulse.pitch + pitchGust, -WIND_MAX_TILT, WIND_MAX_TILT);
+    windImpulse.yaw = THREE.MathUtils.clamp(windImpulse.yaw + yawGust, -WIND_MAX_YAW, WIND_MAX_YAW);
+}
+
+function updateWindImpulse() {
+    windImpulse.x *= WIND_PULSE_DECAY;
+    windImpulse.y *= WIND_PULSE_DECAY;
+    windImpulse.z *= WIND_PULSE_DECAY;
+    windImpulse.roll *= WIND_PULSE_DECAY;
+    windImpulse.pitch *= WIND_PULSE_DECAY;
+    windImpulse.yaw *= WIND_PULSE_DECAY;
+
+    if (Math.abs(windImpulse.x) < WIND_PULSE_MIN) windImpulse.x = 0;
+    if (Math.abs(windImpulse.y) < WIND_PULSE_MIN) windImpulse.y = 0;
+    if (Math.abs(windImpulse.z) < WIND_PULSE_MIN) windImpulse.z = 0;
+    if (Math.abs(windImpulse.roll) < WIND_PULSE_MIN) windImpulse.roll = 0;
+    if (Math.abs(windImpulse.pitch) < WIND_PULSE_MIN) windImpulse.pitch = 0;
+    if (Math.abs(windImpulse.yaw) < WIND_PULSE_MIN) windImpulse.yaw = 0;
+}
+
+function updateWindIndicator() {
+    if (!windIndicator) {
+        return;
+    }
+
+    if (windIndicatorLife <= 0) {
+        windIndicator.classList.add('hidden');
+        return;
+    }
+
+    windIndicatorLife = Math.max(0, windIndicatorLife - 0.045);
+    const fade = windIndicatorLife * windIndicatorLife;
+    windIndicator.style.opacity = `${fade}`;
+    windIndicator.classList.toggle('hidden', windIndicatorLife <= 0.01);
+
+    if (windIndicatorLine) {
+        windIndicatorLine.style.width = `${Math.max(24, windIndicatorLength - 18)}px`;
+    }
+    if (windIndicatorHead) {
+        windIndicatorHead.style.left = `${Math.max(14, windIndicatorLength - 18)}px`;
+    }
+    if (windIndicatorLabel) {
+        windIndicatorLabel.style.transform = `translate(-50%, -50%) rotate(${-windIndicatorAngle}rad)`;
+    }
+}
+
 function normalizeHeading(degrees) {
     return ((degrees % 360) + 360) % 360;
 }
@@ -1370,6 +1533,12 @@ function resetSimulation() {
     correctionActive = false;
     correctionArrow.visible = false;
     correctionArrow.scale.setScalar(0.001);
+    windImpulse.x = 0;
+    windImpulse.y = 0;
+    windImpulse.z = 0;
+    windImpulse.roll = 0;
+    windImpulse.pitch = 0;
+    windImpulse.yaw = 0;
     setOverlayVisible(false);
 }
 
@@ -1435,13 +1604,24 @@ function applyCenterLockAssist() {
         return;
     }
 
-    ballLocalVelocity.x *= CENTER_LOCK_DAMPING;
-    ballLocalVelocity.z *= CENTER_LOCK_DAMPING;
+    const desiredLocalVelocityX = THREE.MathUtils.clamp(
+        (-ballLocalPosition.x * 1.65) - (ballLocalVelocity.x * 0.72),
+        -0.12,
+        0.12
+    );
+    const desiredLocalVelocityZ = THREE.MathUtils.clamp(
+        (-ballLocalPosition.z * 1.65) - (ballLocalVelocity.z * 0.72),
+        -0.12,
+        0.12
+    );
 
-    if (Math.abs(ballLocalVelocity.x) < 0.005) {
+    ballLocalVelocity.x = THREE.MathUtils.lerp(ballLocalVelocity.x, desiredLocalVelocityX, 1 - CENTER_LOCK_DAMPING);
+    ballLocalVelocity.z = THREE.MathUtils.lerp(ballLocalVelocity.z, desiredLocalVelocityZ, 1 - CENTER_LOCK_DAMPING);
+
+    if (Math.abs(ballLocalPosition.x) < 0.008 && Math.abs(ballLocalVelocity.x) < 0.01) {
         ballLocalVelocity.x = 0;
     }
-    if (Math.abs(ballLocalVelocity.z) < 0.005) {
+    if (Math.abs(ballLocalPosition.z) < 0.008 && Math.abs(ballLocalVelocity.z) < 0.01) {
         ballLocalVelocity.z = 0;
     }
 
@@ -1714,10 +1894,10 @@ function updateMovementState() {
                 -ASSIST_CENTER_TRANSLATION_MAX,
                 ASSIST_CENTER_TRANSLATION_MAX
             );
-            let centerScale = pilotPlanarNeutral ? 1.0 : 0;
+            let centerScale = pilotPlanarNeutral ? 1.35 : 0;
             if (!pilotPlanarNeutral) {
                 const edgeRescueWeight = THREE.MathUtils.clamp((edgeRatio - EDGE_RESCUE_START) / (1 - EDGE_RESCUE_START), 0, 1);
-                centerScale = edgeRescueWeight * 0.55;
+                centerScale = edgeRescueWeight * 0.9;
             }
             const rightRescueGate = pitchDominantInput ? 0 : 1;
             const forwardRescueGate = rollDominantInput ? 0 : 1;
@@ -1754,6 +1934,19 @@ function updateMovementState() {
         const dynamicTiltLimit = THREE.MathUtils.lerp(TILT_LIMIT, EDGE_RESCUE_MAX_TILT, rescueBlend);
         targetMovement.roll = THREE.MathUtils.clamp(targetMovement.roll, -dynamicTiltLimit, dynamicTiltLimit);
         targetMovement.pitch = THREE.MathUtils.clamp(targetMovement.pitch, -dynamicTiltLimit, dynamicTiltLimit);
+    }
+
+    targetMovement.x += windImpulse.x;
+    targetMovement.y += windImpulse.y;
+    targetMovement.z += windImpulse.z;
+    targetMovement.roll += windImpulse.roll;
+    targetMovement.pitch += windImpulse.pitch;
+    targetMovement.yawRate += windImpulse.yaw;
+
+    if (windImpulse.x || windImpulse.y || windImpulse.z || windImpulse.roll || windImpulse.pitch || windImpulse.yaw) {
+        targetMovement.x += windImpulse.x * 0.8;
+        targetMovement.z += windImpulse.z * 0.8;
+        targetMovement.y += windImpulse.y * 0.45;
     }
 
     if (assistedMode) {
@@ -1906,6 +2099,15 @@ function updateTrayBody() {
     const velocityZ = (targetZ - trayBody.position.z) / FIXED_TIME_STEP;
     trayBody.velocity.set(velocityX, clampedYDelta / FIXED_TIME_STEP, velocityZ);
     trayBody.angularVelocity.set(0, 0, 0);
+
+    if (windImpulse.x || windImpulse.y || windImpulse.z || windImpulse.roll || windImpulse.pitch || windImpulse.yaw) {
+        trayBody.velocity.x += windImpulse.x * 9.5;
+        trayBody.velocity.y += windImpulse.y * 6.0;
+        trayBody.velocity.z += windImpulse.z * 9.5;
+        trayBody.angularVelocity.x += windImpulse.pitch * 5.0;
+        trayBody.angularVelocity.y += windImpulse.yaw * 5.5;
+        trayBody.angularVelocity.z += windImpulse.roll * 5.0;
+    }
     trayBody.position.copy(trayPos);
 
     trayQuat.setFromEuler(movement.pitch, movement.yaw, movement.roll, 'YXZ');
@@ -2052,6 +2254,8 @@ function animate() {
     updateInput();
     handleGamepadToggles();
     updateBallLocalState();
+    updateWindImpulse();
+    updateWindIndicator();
 
     updateMovementState();
     updateTrayBody();
