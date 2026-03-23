@@ -22,6 +22,11 @@ const keyState = {
 
 const deadzone = 0.2;
 
+const controlKeys = new Set([
+    'KeyW', 'KeyA', 'KeyS', 'KeyD',
+    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+]);
+
 function applyDeadzone(value) {
     if (Math.abs(value) < deadzone) {
         return 0;
@@ -33,10 +38,21 @@ function clampInput(value) {
     return Math.max(-1, Math.min(1, value));
 }
 
+function handleKeyboardEvent(event, pressed) {
+    if (event.code in keyState) {
+        keyState[event.code] = pressed;
+        activeInputSource = 'keyboard';
+    }
+
+    if (controlKeys.has(event.code)) {
+        event.preventDefault();
+    }
+}
+
 function getKeyboardAxes() {
     const moveX = (keyState.KeyD ? 1 : 0) - (keyState.KeyA ? 1 : 0);
     const moveZ = (keyState.KeyS ? 1 : 0) - (keyState.KeyW ? 1 : 0);
-    const roll = (keyState.ArrowRight ? 1 : 0) - (keyState.ArrowLeft ? 1 : 0);
+    const roll = (keyState.ArrowLeft ? 1 : 0) - (keyState.ArrowRight ? 1 : 0);
     const pitch = (keyState.ArrowUp ? 1 : 0) - (keyState.ArrowDown ? 1 : 0);
 
     return { moveX, moveZ, roll, pitch };
@@ -87,17 +103,18 @@ function recomputeUnifiedInput() {
     input.throttle = clampInput(gamepad.throttle);
 }
 
-window.addEventListener('keydown', (event) => {
-    if (event.code in keyState) {
-        keyState[event.code] = true;
-        activeInputSource = 'keyboard';
-    }
-});
+document.addEventListener('keydown', (event) => {
+    handleKeyboardEvent(event, true);
+}, { passive: false });
 
-window.addEventListener('keyup', (event) => {
-    if (event.code in keyState) {
-        keyState[event.code] = false;
-    }
+document.addEventListener('keyup', (event) => {
+    handleKeyboardEvent(event, false);
+}, { passive: false });
+
+window.addEventListener('blur', () => {
+    Object.keys(keyState).forEach((code) => {
+        keyState[code] = false;
+    });
 });
 
 export function updateInput() {

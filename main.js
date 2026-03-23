@@ -52,8 +52,11 @@ const EDGE_STUCK_SPEED = 0.09;
 const EDGE_UNSTICK_NUDGE = 0.18;
 const EDGE_BOUNCE_ZONE = 0.03;
 const EDGE_BOUNCE_MIN_SPEED = 0.24;
-const EDGE_BOUNCE_RESTITUTION = 0.62;
+const EDGE_BOUNCE_RESTITUTION = 0.48;
 const EDGE_BOUNCE_COOLDOWN = 0.08;
+const CENTER_LOCK_SPEED = 0.28;
+const CENTER_LOCK_TRANSLATION = 0.02;
+const CENTER_LOCK_DAMPING = 0.16;
 const ASSIST_MICRO_TILT_MIN = 0.02;
 const ASSIST_MICRO_TILT_MAX = 0.09;
 const ASSIST_CENTER_KP = 0.52;
@@ -262,8 +265,8 @@ const world = new CANNON.World({
     gravity: new CANNON.Vec3(0, -9.82, 0),
 });
 world.broadphase = new CANNON.SAPBroadphase(world);
-world.solver.iterations = 20;
-world.solver.tolerance = 0.001;
+world.solver.iterations = 30;
+world.solver.tolerance = 0.0005;
 world.allowSleep = false;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -397,6 +400,9 @@ world.addBody(trayBody);
 
 const ballRadius = 0.18;
 const traySafeHalf = trayInnerHalf - trayWallThickness * 0.5 - ballRadius;
+const { group: trayCoordinateSystem, ballMarker: trayBallMarker } = createTrayCoordinateSystem(traySafeHalf);
+trayCoordinateSystem.position.set(0, TRAY_OFFSET_Y, 0);
+drone.add(trayCoordinateSystem);
 const ballMesh = new THREE.Mesh(
     new THREE.SphereGeometry(ballRadius, 28, 20),
     new THREE.MeshStandardMaterial({ color: 0xff4e42 })
@@ -408,8 +414,8 @@ const ballBody = new CANNON.Body({
     material: ballPhysMaterial,
     shape: new CANNON.Sphere(ballRadius),
     position: new CANNON.Vec3(0, DRONE_HEIGHT + TRAY_OFFSET_Y + 0.25, 0),
-    linearDamping: 0.035,
-    angularDamping: 0.05,
+    linearDamping: 0.08,
+    angularDamping: 0.18,
 });
 ballBody.ccdSpeedThreshold = 0.01;
 ballBody.ccdIterations = 10;
@@ -424,12 +430,12 @@ world.addContactMaterial(
 
 world.addContactMaterial(
     new CANNON.ContactMaterial(trayPhysMaterial, ballPhysMaterial, {
-        friction: 0.12,
-        restitution: 0.08,
-        contactEquationStiffness: 1e7,
-        contactEquationRelaxation: 3,
-        frictionEquationStiffness: 1e7,
-        frictionEquationRelaxation: 3,
+        friction: 0.42,
+        restitution: 0.02,
+        contactEquationStiffness: 1e8,
+        contactEquationRelaxation: 2,
+        frictionEquationStiffness: 1e8,
+        frictionEquationRelaxation: 2,
     })
 );
 
@@ -724,6 +730,7 @@ const telemetry = {
     frontDistance: document.getElementById('tm-front-distance'),
     ballInTray: document.getElementById('tm-ball-in-tray'),
     ballInCenter: document.getElementById('tm-center'),
+    ballLocal: document.getElementById('tm-ball-local'),
     position: document.getElementById('tm-position'),
     altitude: document.getElementById('tm-altitude'),
     speed: document.getElementById('tm-speed'),
@@ -756,6 +763,7 @@ const gameTelemetry = {
     speed: document.getElementById('gh-speed'),
     ballInTray: document.getElementById('gh-ball-in-tray'),
     ballInCenter: document.getElementById('gh-center'),
+    ballLocal: document.getElementById('gh-ball-local'),
 };
 const attitudeEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 const trayToWorldQuat = new THREE.Quaternion();
@@ -764,6 +772,7 @@ const ballOffsetWorld = new THREE.Vector3();
 const relativeVelocityWorld = new THREE.Vector3();
 const ballLocalPosition = new THREE.Vector3();
 const ballLocalVelocity = new THREE.Vector3();
+const ballLocalCoordinates = new THREE.Vector2();
 const correctionArrowOffset = new THREE.Vector3(0.9, 0.65, 0.35);
 const correctionArrowWorldPos = new THREE.Vector3();
 const correctionArrowTargetDir = new THREE.Vector3(1, 0, 0);
@@ -771,6 +780,59 @@ const correctionArrowDirection = new THREE.Vector3(1, 0, 0);
 const correctionUpAxis = new THREE.Vector3(0, 1, 0);
 const frontSensorOrigin = new THREE.Vector3();
 const frontSensorDirection = new THREE.Vector3();
+
+function createTrayCoordinateSystem(axisHalfSize) {
+    const group = new THREE.Group();
+    group.name = 'tray-coordinate-system';
+
+    const axisMaterialX = new THREE.LineBasicMaterial({ color: 0xff5e5e, transparent: true, opacity: 0.9 });
+    const axisMaterialZ = new THREE.LineBasicMaterial({ color: 0x53c7ff, transparent: true, opacity: 0.9 });
+    const centerMaterial = new THREE.MeshStandardMaterial({
+        color: 0x7dff9f,
+        emissive: 0x12341c,
+        emissiveIntensity: 0.75,
+        transparent: true,
+        opacity: 0.95,
+    });
+
+    const axisLength = axisHalfSize * 0.96;
+    const axisYOffset = 0.021;
+
+    const xAxisGeometry = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(-axisLength, axisYOffset, 0),
+        new THREE.Vector3(axisLength, axisYOffset, 0),
+    ]);
+    const zAxisGeometry = new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(0, axisYOffset, -axisLength),
+        new THREE.Vector3(0, axisYOffset, axisLength),
+    ]);
+
+    const xAxis = new THREE.Line(xAxisGeometry, axisMaterialX);
+    const zAxis = new THREE.Line(zAxisGeometry, axisMaterialZ);
+
+    const centerDot = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.01, 18), centerMaterial);
+    centerDot.rotation.x = Math.PI * 0.5;
+    centerDot.position.y = axisYOffset + 0.004;
+
+    const ballMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.05, 16, 12),
+        new THREE.MeshStandardMaterial({
+            color: 0xffd35a,
+            emissive: 0x5f3c00,
+            emissiveIntensity: 0.8,
+            transparent: true,
+            opacity: 0.95,
+        })
+    );
+    ballMarker.position.y = axisYOffset + 0.028;
+
+    group.add(xAxis);
+    group.add(zAxis);
+    group.add(centerDot);
+    group.add(ballMarker);
+
+    return { group, ballMarker };
+}
 
 function rayAabbDistance(origin, direction, box) {
     const minX = box.x - box.hx;
@@ -1086,6 +1148,7 @@ function updateBallLocalState() {
         ballBody.velocity.z - trayBody.velocity.z
     );
     ballLocalVelocity.copy(relativeVelocityWorld).applyQuaternion(worldToTrayQuat);
+    ballLocalCoordinates.set(ballLocalPosition.x, ballLocalPosition.z);
 }
 
 function isBallInsideTray() {
@@ -1206,6 +1269,9 @@ function updateTelemetry() {
     telemetry.ballInCenter.textContent = ballInCenter ? 'YES' : 'NO';
     telemetry.ballInCenter.classList.toggle('status-good', ballInCenter);
     telemetry.ballInCenter.classList.toggle('status-bad', !ballInCenter);
+    if (telemetry.ballLocal) {
+        telemetry.ballLocal.textContent = `(${ballLocalCoordinates.x.toFixed(2)}, ${ballLocalCoordinates.y.toFixed(2)})`;
+    }
 
     telemetry.position.textContent = `(${drone.position.x.toFixed(2)}, ${drone.position.y.toFixed(2)}, ${drone.position.z.toFixed(2)})`;
     telemetry.altitude.textContent = `${drone.position.y.toFixed(2)} m`;
@@ -1232,6 +1298,9 @@ function updateTelemetry() {
         gameTelemetry.ballInTray.classList.toggle('status-bad', !ballInside);
         gameTelemetry.ballInCenter.classList.toggle('status-good', ballInCenter);
         gameTelemetry.ballInCenter.classList.toggle('status-bad', !ballInCenter);
+        if (gameTelemetry.ballLocal) {
+            gameTelemetry.ballLocal.textContent = `(${ballLocalCoordinates.x.toFixed(2)}, ${ballLocalCoordinates.y.toFixed(2)})`;
+        }
     }
 
     if (compassTape) {
@@ -1344,6 +1413,44 @@ function applyEdgeBounceAssist() {
     worldVelocity.z += trayBody.velocity.z;
     ballBody.velocity.set(worldVelocity.x, worldVelocity.y, worldVelocity.z);
     edgeBounceCooldown = EDGE_BOUNCE_COOLDOWN;
+}
+
+function applyCenterLockAssist() {
+    if (!assistedMode) {
+        return;
+    }
+
+    const centerRegionHalf = getCenterRegionHalfSize();
+    if (!isBallInCenterRegion(centerRegionHalf)) {
+        return;
+    }
+
+    const planarSpeed = Math.hypot(ballLocalVelocity.x, ballLocalVelocity.z);
+    const closeEnoughToCapture =
+        planarSpeed <= CENTER_LOCK_SPEED &&
+        Math.abs(ballLocalPosition.x) <= centerRegionHalf + CENTER_LOCK_TRANSLATION &&
+        Math.abs(ballLocalPosition.z) <= centerRegionHalf + CENTER_LOCK_TRANSLATION;
+
+    if (!closeEnoughToCapture) {
+        return;
+    }
+
+    ballLocalVelocity.x *= CENTER_LOCK_DAMPING;
+    ballLocalVelocity.z *= CENTER_LOCK_DAMPING;
+
+    if (Math.abs(ballLocalVelocity.x) < 0.005) {
+        ballLocalVelocity.x = 0;
+    }
+    if (Math.abs(ballLocalVelocity.z) < 0.005) {
+        ballLocalVelocity.z = 0;
+    }
+
+    const worldVelocity = ballLocalVelocity.clone().applyQuaternion(trayToWorldQuat);
+    worldVelocity.x += trayBody.velocity.x;
+    worldVelocity.y += trayBody.velocity.y;
+    worldVelocity.z += trayBody.velocity.z;
+    ballBody.velocity.set(worldVelocity.x, worldVelocity.y, worldVelocity.z);
+    ballBody.angularVelocity.set(0, 0, 0);
 }
 
 function updateCenterRegionUi(syncSlider = false) {
@@ -1591,7 +1698,12 @@ function updateMovementState() {
     rightCommand += rightFromRoll;
 
     if (assistedMode && !centerHoldActive && !forwardStickOverride && pilotPlanarNeutral) {
-        if (!inCenterRegion) {
+        if (inCenterRegion) {
+            rightCommand = 0;
+            forwardCommand = 0;
+            targetMovement.x = 0;
+            targetMovement.z = 0;
+        } else {
             const centerRight = THREE.MathUtils.clamp(
                 (ballLocalPosition.x * ASSIST_CENTER_TRANSLATION_P + ballLocalVelocity.x * ASSIST_CENTER_TRANSLATION_D),
                 -ASSIST_CENTER_TRANSLATION_MAX,
@@ -1831,6 +1943,12 @@ function syncVisuals() {
     correctionArrow.quaternion.setFromUnitVectors(correctionUpAxis, correctionArrowDirection);
     correctionArrow.scale.setScalar(Math.max(0.001, correctionArrowScale));
 
+    if (trayBallMarker) {
+        trayBallMarker.position.x = THREE.MathUtils.clamp(ballLocalPosition.x, -traySafeHalf, traySafeHalf);
+        trayBallMarker.position.z = THREE.MathUtils.clamp(ballLocalPosition.z, -traySafeHalf, traySafeHalf);
+        trayBallMarker.visible = isBallInsideTray();
+    }
+
     ballMesh.position.set(ballBody.position.x, ballBody.position.y, ballBody.position.z);
     ballMesh.quaternion.set(
         ballBody.quaternion.x,
@@ -1942,6 +2060,8 @@ function animate() {
 
     updateBallLocalState();
     applyEdgeBounceAssist();
+    applyCenterLockAssist();
+    updateBallLocalState();
 
     if (isBallInsideTray()) {
         outOfTrayTime = 0;
