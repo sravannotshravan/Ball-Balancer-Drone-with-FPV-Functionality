@@ -111,6 +111,19 @@ const MINIMAP_SIZE = 220;
 const MINIMAP_RANGE = 38;
 const MINIMAP_OBSTACLE_LIMIT = 220;
 
+// Dynamic Drone Physics Constants
+const DRONE_MASS = 1.45;
+const DRONE_THRUST_COMPENSATION = 9.82 * DRONE_MASS; // Hover thrust
+const DRONE_THRUST_GAIN = 11.5;
+const DRONE_ATTITUDE_KP = 18.5;
+const DRONE_ATTITUDE_KD = 6.8;
+const DRONE_YAW_KP = 14.5;
+const DRONE_YAW_KD = 5.2;
+const DRONE_ALTITUDE_KP = 12.0;
+const DRONE_ALTITUDE_KD = 7.5;
+const DRONE_LINEAR_DAMPING = 0.42;
+const DRONE_ANGULAR_DAMPING = 0.58;
+
 const currentPage = window.location.pathname.toLowerCase();
 const isMobileFrontView = currentPage.endsWith('/mobile.html') || currentPage.endsWith('mobile.html');
 
@@ -531,10 +544,12 @@ scene.add(correctionArrow);
 
 const trayHalfExtents = new CANNON.Vec3(0.6, 0.06, 0.6);
 const trayBody = new CANNON.Body({
-    type: CANNON.Body.KINEMATIC,
-    mass: 0,
+    type: CANNON.Body.DYNAMIC,
+    mass: DRONE_MASS,
     material: trayPhysMaterial,
     position: new CANNON.Vec3(0, DRONE_HEIGHT + TRAY_OFFSET_Y, 0),
+    linearDamping: DRONE_LINEAR_DAMPING,
+    angularDamping: DRONE_ANGULAR_DAMPING,
 });
 
 const trayWallThickness = 0.06;
@@ -1967,21 +1982,28 @@ function setOverlayMessage(message) {
     }
 }
 
-function setTrayKinematic() {
-    trayBody.type = CANNON.Body.KINEMATIC;
-    trayBody.mass = 0;
-    trayBody.linearDamping = 0;
-    trayBody.angularDamping = 0;
+function setTrayDynamicsEnabled(enabled) {
+    if (enabled) {
+        trayBody.type = CANNON.Body.DYNAMIC;
+        trayBody.mass = DRONE_MASS;
+        trayBody.linearDamping = DRONE_LINEAR_DAMPING;
+        trayBody.angularDamping = DRONE_ANGULAR_DAMPING;
+    } else {
+        trayBody.type = CANNON.Body.KINEMATIC;
+        trayBody.mass = 0;
+        trayBody.linearDamping = 0;
+        trayBody.angularDamping = 0;
+    }
     trayBody.updateMassProperties();
+    trayBody.wakeUp();
+}
+
+function setTrayKinematic() {
+    setTrayDynamicsEnabled(false);
 }
 
 function setTrayDynamic() {
-    trayBody.type = CANNON.Body.DYNAMIC;
-    trayBody.mass = 6.5;
-    trayBody.linearDamping = 0.22;
-    trayBody.angularDamping = 0.35;
-    trayBody.updateMassProperties();
-    trayBody.wakeUp();
+    setTrayDynamicsEnabled(true);
 }
 
 function triggerDroneCrash(impactVelocityX = 0, impactVelocityY = 0, impactVelocityZ = 0) {
@@ -2639,33 +2661,77 @@ function handleGamepadToggles() {
     prevGamepadRBPressed = rbPressed;
 }
 
+const trayLocalUp = new CANNON.Vec3(0, 1, 0);
+const trayWorldUp = new CANNON.Vec3();
+const trayEuler = new THREE.Euler();
+const trayQuatForEuler = new THREE.Quaternion();
+
 function updateTrayBody() {
     if (droneCrashed) {
         return;
     }
 
-    const desiredY = Math.max(
-        trayBody.position.y + movement.y * FIXED_TIME_STEP,
-        MIN_ALTITUDE + TRAY_OFFSET_Y
+    // 1. Calculate Target Attitude Errors (PD Control)
+    trayQuatForEuler.set(
+        trayBody.quaternion.x,
+        trayBody.quaternion.y,
+        trayBody.quaternion.z,
+        trayBody.quaternion.w
     );
-    const clampedYDelta = THREE.MathUtils.clamp(
-        desiredY - trayBody.position.y,
-        -MAX_VERTICAL_STEP,
-        MAX_VERTICAL_STEP
+    trayEuler.setFromQuaternion(trayQuatForEuler, 'YXZ');
+
+    const targetPitch = movement.pitch;
+    const targetRoll = movement.roll;
+    const targetYawRate = targetMovement.yawRate;
+
+    const pitchError = targetPitch - trayEuler.x;
+    const rollError = targetRoll - trayEuler.z;
+    const yawRateError = targetYawRate - trayBody.angularVelocity.y;
+
+    const pitchTorque = pitchError * DRONE_ATTITUDE_KP - trayBody.angularVelocity.x * DRONE_ATTITUDE_KD;
+    const rollTorque = rollError * DRONE_ATTITUDE_KP - trayBody.angularVelocity.z * DRONE_ATTITUDE_KD;
+    const yawTorque = yawRateError * DRONE_YAW_KP;
+
+    trayBody.torque.set(pitchTorque, yawTorque, rollTorque);
+
+    // 2. Calculate Vertical Control (Throttle)
+    const currentAltitude = trayBody.position.y;
+    const verticalVel = trayBody.velocity.y;
+    // We blend throttle input with an altitude-hold assist if no throttle is applied
+    const throttleBias = Math.abs(input.throttle) < 0.05 ? (DRONE_ALTITUDE_KP * (targetMovement.y === 0 ? 0 : 0)) : (input.throttle * DRONE_THRUST_GAIN);
+    
+    // In dynamic mode, targetMovement.y is treated as a desired velocity
+    const velocityErrorY = targetMovement.y - verticalVel;
+    const thrustY = DRONE_THRUST_COMPENSATION + (velocityErrorY * DRONE_ALTITUDE_KD) + (input.throttle * DRONE_THRUST_GAIN);
+    
+    // Apply thrust along local up
+    trayBody.quaternion.vmult(trayLocalUp, trayWorldUp);
+    trayBody.force.set(
+        trayWorldUp.x * thrustY,
+        trayWorldUp.y * thrustY,
+        trayWorldUp.z * thrustY
     );
 
-    let targetX = trayBody.position.x + movement.x * FIXED_TIME_STEP;
-    let targetZ = trayBody.position.z + movement.z * FIXED_TIME_STEP;
-    const targetY = trayBody.position.y + clampedYDelta;
+    // 3. Wind and External Impulses
+    if (windImpulse.x || windImpulse.y || windImpulse.z || windImpulse.roll || windImpulse.pitch || windImpulse.yaw) {
+        trayBody.force.x += windImpulse.x * 12.0;
+        trayBody.force.y += windImpulse.y * 8.0;
+        trayBody.force.z += windImpulse.z * 12.0;
+        trayBody.torque.x += windImpulse.pitch * 6.0;
+        trayBody.torque.y += windImpulse.yaw * 6.5;
+        trayBody.torque.z += windImpulse.roll * 6.0;
+    }
+
+    // 4. Obstacle Collision Detection (Visual Only Check)
     const trayHalfX = trayHalfExtents.x;
     const trayHalfY = trayHalfExtents.y + trayWallHeight;
     const trayHalfZ = trayHalfExtents.z;
 
     for (let index = 0; index < activeObstacleColliders.length; index += 1) {
         const obstacle = activeObstacleColliders[index];
-        const overlapsX = Math.abs(targetX - obstacle.x) <= (trayHalfX + obstacle.hx + OBSTACLE_COLLISION_PADDING);
-        const overlapsY = Math.abs(targetY - obstacle.y) <= (trayHalfY + obstacle.hy + OBSTACLE_COLLISION_PADDING);
-        const overlapsZ = Math.abs(targetZ - obstacle.z) <= (trayHalfZ + obstacle.hz + OBSTACLE_COLLISION_PADDING);
+        const overlapsX = Math.abs(trayBody.position.x - obstacle.x) <= (trayHalfX + obstacle.hx + OBSTACLE_COLLISION_PADDING);
+        const overlapsY = Math.abs(trayBody.position.y - obstacle.y) <= (trayHalfY + obstacle.hy + OBSTACLE_COLLISION_PADDING);
+        const overlapsZ = Math.abs(trayBody.position.z - obstacle.z) <= (trayHalfZ + obstacle.hz + OBSTACLE_COLLISION_PADDING);
 
         if (overlapsX && overlapsY && overlapsZ) {
             triggerDroneCrash(
@@ -2676,30 +2742,6 @@ function updateTrayBody() {
             break;
         }
     }
-
-    if (droneCrashed) {
-        return;
-    }
-
-    trayPos.set(targetX, targetY, targetZ);
-
-    const velocityX = (targetX - trayBody.position.x) / FIXED_TIME_STEP;
-    const velocityZ = (targetZ - trayBody.position.z) / FIXED_TIME_STEP;
-    trayBody.velocity.set(velocityX, clampedYDelta / FIXED_TIME_STEP, velocityZ);
-    trayBody.angularVelocity.set(0, 0, 0);
-
-    if (windImpulse.x || windImpulse.y || windImpulse.z || windImpulse.roll || windImpulse.pitch || windImpulse.yaw) {
-        trayBody.velocity.x += windImpulse.x * 9.5;
-        trayBody.velocity.y += windImpulse.y * 6.0;
-        trayBody.velocity.z += windImpulse.z * 9.5;
-        trayBody.angularVelocity.x += windImpulse.pitch * 5.0;
-        trayBody.angularVelocity.y += windImpulse.yaw * 5.5;
-        trayBody.angularVelocity.z += windImpulse.roll * 5.0;
-    }
-    trayBody.position.copy(trayPos);
-
-    trayQuat.setFromEuler(movement.pitch, movement.yaw, movement.roll, 'YXZ');
-    trayBody.quaternion.copy(trayQuat);
 }
 
 function syncVisuals() {
