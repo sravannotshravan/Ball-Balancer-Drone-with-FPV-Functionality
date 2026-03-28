@@ -163,8 +163,22 @@ function createCityEnvironment() {
     const colliders = [];
     const rand = createSeededRandom(53121);
 
-    const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x323943, roughness: 0.95 });
-    const buildingMaterial = new THREE.MeshStandardMaterial({ color: 0x5a6672, roughness: 0.82, metalness: 0.08 });
+    const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x3a424e, roughness: 0.9 });
+    const styles = [
+        { color: 0x8a8a8a, metal: 0.1, rough: 0.75 }, // Concrete
+        { color: 0x7a4d3b, metal: 0, rough: 0.9 },    // Brick
+        { color: 0x243b5a, metal: 0.85, rough: 0.1 }, // Glass
+        { color: 0xe0e0e0, metal: 0.9, rough: 0.2 },  // Steel
+        { color: 0x1a1a1a, metal: 0.2, rough: 0.8 }   // Dark Office
+    ];
+    
+    // Create shared materials for window types
+    const windowLitMaterials = [
+        new THREE.MeshStandardMaterial({ color: 0xfff9e6, emissive: 0x3d2b00, emissiveIntensity: 1.8 }),
+        new THREE.MeshStandardMaterial({ color: 0x39d8ff, emissive: 0x0a3f5a, emissiveIntensity: 1.6 })
+    ];
+    const floorDivideMaterial = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5 });
+
     const roadStripLength = 164;
     const cityHalfSize = 72;
     const gridStep = 8;
@@ -181,36 +195,62 @@ function createCityEnvironment() {
     }
 
     const buildingGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const antennaGeometry = new THREE.CylinderGeometry(0.015, 0.015, 1.4, 8);
 
     for (let x = -cityHalfSize; x <= cityHalfSize; x += gridStep) {
         for (let z = -cityHalfSize; z <= cityHalfSize; z += gridStep) {
-            if (Math.hypot(x, z) < centralClearRadius) {
-                continue;
+            if (Math.hypot(x, z) < centralClearRadius) continue;
+            if (rand() < 0.38) continue;
+
+            const height = 3 + Math.pow(rand(), 1.42) * 26;
+            const width = 2.2 + rand() * 2.8;
+            const depth = 2.2 + rand() * 2.8;
+            const style = styles[Math.floor(rand() * styles.length)];
+
+            const building = new THREE.Group();
+            const facade = new THREE.Mesh(buildingGeometry, new THREE.MeshStandardMaterial({
+                color: style.color,
+                metalness: style.metal,
+                roughness: style.rough
+            }));
+            facade.scale.set(width, height, depth);
+            facade.position.y = height * 0.5;
+            building.add(facade);
+
+            // Floors / Windows (Efficiently)
+            const floorHeight = 1.35;
+            const floorCount = Math.floor(height / floorHeight) - 1;
+            const winMat = windowLitMaterials[Math.floor(rand() * windowLitMaterials.length)];
+
+            for (let f = 1; f <= floorCount; f++) {
+                if (rand() < 0.15) continue; // Gap floors
+                
+                const isLit = rand() < 0.6;
+                const slice = new THREE.Mesh(
+                    new THREE.BoxGeometry(width + 0.04, 0.08, depth + 0.04),
+                    isLit ? winMat : floorDivideMaterial
+                );
+                slice.position.y = f * floorHeight;
+                building.add(slice);
             }
 
-            if (rand() < 0.42) {
-                continue;
+            // Rooftop
+            const roof = new THREE.Mesh(new THREE.BoxGeometry(width + 0.1, 0.2, depth + 0.1), floorDivideMaterial);
+            roof.position.y = height + 0.05;
+            building.add(roof);
+
+            if (rand() < 0.15) {
+                const ant = new THREE.Mesh(antennaGeometry, floorDivideMaterial);
+                ant.position.set((rand() - 0.5) * width * 0.5, height + 0.7, (rand() - 0.5) * depth * 0.5);
+                building.add(ant);
             }
 
-            const height = 2 + Math.pow(rand(), 1.35) * 24;
-            const width = 2 + rand() * 2.6;
-            const depth = 2 + rand() * 2.6;
-
-            const building = new THREE.Mesh(buildingGeometry, buildingMaterial.clone());
-            building.scale.set(width, height, depth);
-            building.position.set(
-                x + (rand() - 0.5) * 2.3,
-                height * 0.5,
-                z + (rand() - 0.5) * 2.3
-            );
-
-            const lightness = 0.3 + rand() * 0.28;
-            building.material.color.setHSL(0.58 + rand() * 0.05, 0.15, lightness);
+            building.position.set(x + (rand() - 0.5) * 2, 0, z + (rand() - 0.5) * 2);
             group.add(building);
 
             colliders.push({
                 x: building.position.x,
-                y: building.position.y,
+                y: height * 0.5,
                 z: building.position.z,
                 hx: width * 0.5,
                 hy: height * 0.5,
@@ -218,7 +258,6 @@ function createCityEnvironment() {
             });
         }
     }
-
     return { group, colliders };
 }
 
@@ -254,6 +293,9 @@ function createMountainPlainsEnvironment() {
     }
 
     const hillGeometry = new THREE.SphereGeometry(1, 12, 10);
+    const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x3d5a2d, roughness: 0.9 });
+    const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3a2d, roughness: 1.0 });
+
     for (let index = 0; index < 90; index += 1) {
         const angle = rand() * Math.PI * 2;
         const radius = 18 + rand() * 60;
@@ -266,6 +308,28 @@ function createMountainPlainsEnvironment() {
         hill.position.set(Math.cos(angle) * radius, scaleY - 0.6, Math.sin(angle) * radius);
         hill.material.color.offsetHSL((rand() - 0.5) * 0.05, 0, (rand() - 0.5) * 0.14);
         group.add(hill);
+
+        // Add a cluster of trees on hills occasionally
+        if (rand() < 0.35) {
+            const treeCount = 1 + Math.floor(rand() * 4);
+            for (let t = 0; t < treeCount; t++) {
+                const tree = new THREE.Group();
+                const tx = (rand() - 0.5) * scaleXZ * 0.6;
+                const tz = (rand() - 0.5) * scaleZ * 0.6;
+                const th = 0.8 + rand() * 1.2;
+                
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.4), trunkMaterial);
+                trunk.position.y = 0.2;
+                tree.add(trunk);
+                
+                const leaves = new THREE.Mesh(new THREE.ConeGeometry(0.4, th, 8), leavesMaterial);
+                leaves.position.y = 0.4 + th * 0.5;
+                tree.add(leaves);
+                
+                tree.position.set(hill.position.x + tx, hill.position.y + scaleY * 0.6, hill.position.z + tz);
+                group.add(tree);
+            }
+        }
 
         colliders.push({
             x: hill.position.x,
@@ -408,7 +472,8 @@ function handleWorldPointerDown(event) {
 }
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xb7d0e8);
+scene.background = new THREE.Color(0x0a101a);
+scene.fog = new THREE.FogExp2(0x0a101a, 0.012);
 
 const world = new CANNON.World({
     gravity: new CANNON.Vec3(0, -9.82, 0),
@@ -461,16 +526,37 @@ const droneFrontCameraRight = new THREE.PerspectiveCamera(76, MINI_CAM_WIDTH / M
 droneFrontCameraRight.position.set(FPV_EYE_SEPARATION * 0.5 + FPV_RIGHT_EYE_SHIFT, 0.12, -0.56);
 droneFrontCameraRight.rotation.y = 0;
 
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+const ambientLight = new THREE.HemisphereLight(0x39d8ff, 0x0a101a, 0.45);
 scene.add(ambientLight);
 
-const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
-directionalLight.position.set(8, 14, 10);
+const directionalLight = new THREE.DirectionalLight(0xffffff, 1.25);
+directionalLight.position.set(12, 24, 18);
+directionalLight.castShadow = true;
 scene.add(directionalLight);
 
-const groundVisualMaterial = new THREE.MeshStandardMaterial({ color: 0x646c75 });
+const canvas = document.createElement('canvas');
+canvas.width = 128;
+canvas.height = 128;
+const ctx = canvas.getContext('2d');
+ctx.fillStyle = '#0a101a';
+ctx.fillRect(0, 0, 128, 128);
+ctx.strokeStyle = '#1a2e4a';
+ctx.lineWidth = 2;
+ctx.strokeRect(0, 0, 128, 128);
+
+const gridTexture = new THREE.CanvasTexture(canvas);
+gridTexture.wrapS = THREE.RepeatWrapping;
+gridTexture.wrapT = THREE.RepeatWrapping;
+gridTexture.repeat.set(60, 60);
+
+const groundVisualMaterial = new THREE.MeshStandardMaterial({ 
+    map: gridTexture,
+    roughness: 0.85,
+    metalness: 0.15
+});
+
 const groundMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(220, 220),
+    new THREE.CircleGeometry(240, 64),
     groundVisualMaterial
 );
 groundMesh.rotation.x = -Math.PI / 2;
