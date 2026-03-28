@@ -111,6 +111,23 @@ const MINIMAP_SIZE = 220;
 const MINIMAP_RANGE = 38;
 const MINIMAP_OBSTACLE_LIMIT = 220;
 
+// Dynamic Drone Physics Constants
+const DRONE_MASS = 1.45;
+const DRONE_THRUST_COMPENSATION = 9.82 * DRONE_MASS; // Hover thrust
+const DRONE_THRUST_GAIN = 11.5;
+const DRONE_ATTITUDE_KP = 18.5;
+const DRONE_ATTITUDE_KD = 6.8;
+const DRONE_ATTITUDE_KI = 2.45; // Integral gain for attitude
+const DRONE_YAW_KP = 14.5;
+const DRONE_YAW_KD = 5.2;
+const DRONE_YAW_KI = 1.05; // Integral gain for yaw
+const DRONE_ALTITUDE_KP = 12.0;
+const DRONE_ALTITUDE_KD = 7.5;
+const DRONE_ALTITUDE_KI = 3.65; // Integral gain for altitude
+const PID_INTEGRAL_MAX = 4.0;  // Anti-windup limit
+const DRONE_LINEAR_DAMPING = 0.42;
+const DRONE_ANGULAR_DAMPING = 0.58;
+
 const currentPage = window.location.pathname.toLowerCase();
 const isMobileFrontView = currentPage.endsWith('/mobile.html') || currentPage.endsWith('mobile.html');
 
@@ -150,8 +167,22 @@ function createCityEnvironment() {
     const colliders = [];
     const rand = createSeededRandom(53121);
 
-    const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x323943, roughness: 0.95 });
-    const buildingMaterial = new THREE.MeshStandardMaterial({ color: 0x5a6672, roughness: 0.82, metalness: 0.08 });
+    const roadMaterial = new THREE.MeshStandardMaterial({ color: 0x3a424e, roughness: 0.9 });
+    const styles = [
+        { color: 0x8a8a8a, metal: 0.1, rough: 0.75 }, // Concrete
+        { color: 0x7a4d3b, metal: 0, rough: 0.9 },    // Brick
+        { color: 0x243b5a, metal: 0.85, rough: 0.1 }, // Glass
+        { color: 0xe0e0e0, metal: 0.9, rough: 0.2 },  // Steel
+        { color: 0x1a1a1a, metal: 0.2, rough: 0.8 }   // Dark Office
+    ];
+    
+    // Create shared materials for window types
+    const windowLitMaterials = [
+        new THREE.MeshStandardMaterial({ color: 0xfff9e6, emissive: 0x3d2b00, emissiveIntensity: 1.8 }),
+        new THREE.MeshStandardMaterial({ color: 0x39d8ff, emissive: 0x0a3f5a, emissiveIntensity: 1.6 })
+    ];
+    const floorDivideMaterial = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.5 });
+
     const roadStripLength = 164;
     const cityHalfSize = 72;
     const gridStep = 8;
@@ -168,36 +199,62 @@ function createCityEnvironment() {
     }
 
     const buildingGeometry = new THREE.BoxGeometry(1, 1, 1);
+    const antennaGeometry = new THREE.CylinderGeometry(0.015, 0.015, 1.4, 8);
 
     for (let x = -cityHalfSize; x <= cityHalfSize; x += gridStep) {
         for (let z = -cityHalfSize; z <= cityHalfSize; z += gridStep) {
-            if (Math.hypot(x, z) < centralClearRadius) {
-                continue;
+            if (Math.hypot(x, z) < centralClearRadius) continue;
+            if (rand() < 0.38) continue;
+
+            const height = 3 + Math.pow(rand(), 1.42) * 26;
+            const width = 2.2 + rand() * 2.8;
+            const depth = 2.2 + rand() * 2.8;
+            const style = styles[Math.floor(rand() * styles.length)];
+
+            const building = new THREE.Group();
+            const facade = new THREE.Mesh(buildingGeometry, new THREE.MeshStandardMaterial({
+                color: style.color,
+                metalness: style.metal,
+                roughness: style.rough
+            }));
+            facade.scale.set(width, height, depth);
+            facade.position.y = height * 0.5;
+            building.add(facade);
+
+            // Floors / Windows (Efficiently)
+            const floorHeight = 1.35;
+            const floorCount = Math.floor(height / floorHeight) - 1;
+            const winMat = windowLitMaterials[Math.floor(rand() * windowLitMaterials.length)];
+
+            for (let f = 1; f <= floorCount; f++) {
+                if (rand() < 0.15) continue; // Gap floors
+                
+                const isLit = rand() < 0.6;
+                const slice = new THREE.Mesh(
+                    new THREE.BoxGeometry(width + 0.04, 0.08, depth + 0.04),
+                    isLit ? winMat : floorDivideMaterial
+                );
+                slice.position.y = f * floorHeight;
+                building.add(slice);
             }
 
-            if (rand() < 0.42) {
-                continue;
+            // Rooftop
+            const roof = new THREE.Mesh(new THREE.BoxGeometry(width + 0.1, 0.2, depth + 0.1), floorDivideMaterial);
+            roof.position.y = height + 0.05;
+            building.add(roof);
+
+            if (rand() < 0.15) {
+                const ant = new THREE.Mesh(antennaGeometry, floorDivideMaterial);
+                ant.position.set((rand() - 0.5) * width * 0.5, height + 0.7, (rand() - 0.5) * depth * 0.5);
+                building.add(ant);
             }
 
-            const height = 2 + Math.pow(rand(), 1.35) * 24;
-            const width = 2 + rand() * 2.6;
-            const depth = 2 + rand() * 2.6;
-
-            const building = new THREE.Mesh(buildingGeometry, buildingMaterial.clone());
-            building.scale.set(width, height, depth);
-            building.position.set(
-                x + (rand() - 0.5) * 2.3,
-                height * 0.5,
-                z + (rand() - 0.5) * 2.3
-            );
-
-            const lightness = 0.3 + rand() * 0.28;
-            building.material.color.setHSL(0.58 + rand() * 0.05, 0.15, lightness);
+            building.position.set(x + (rand() - 0.5) * 2, 0, z + (rand() - 0.5) * 2);
             group.add(building);
 
             colliders.push({
                 x: building.position.x,
-                y: building.position.y,
+                y: height * 0.5,
                 z: building.position.z,
                 hx: width * 0.5,
                 hy: height * 0.5,
@@ -205,7 +262,6 @@ function createCityEnvironment() {
             });
         }
     }
-
     return { group, colliders };
 }
 
@@ -241,6 +297,9 @@ function createMountainPlainsEnvironment() {
     }
 
     const hillGeometry = new THREE.SphereGeometry(1, 12, 10);
+    const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x3d5a2d, roughness: 0.9 });
+    const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3a2d, roughness: 1.0 });
+
     for (let index = 0; index < 90; index += 1) {
         const angle = rand() * Math.PI * 2;
         const radius = 18 + rand() * 60;
@@ -253,6 +312,28 @@ function createMountainPlainsEnvironment() {
         hill.position.set(Math.cos(angle) * radius, scaleY - 0.6, Math.sin(angle) * radius);
         hill.material.color.offsetHSL((rand() - 0.5) * 0.05, 0, (rand() - 0.5) * 0.14);
         group.add(hill);
+
+        // Add a cluster of trees on hills occasionally
+        if (rand() < 0.35) {
+            const treeCount = 1 + Math.floor(rand() * 4);
+            for (let t = 0; t < treeCount; t++) {
+                const tree = new THREE.Group();
+                const tx = (rand() - 0.5) * scaleXZ * 0.6;
+                const tz = (rand() - 0.5) * scaleZ * 0.6;
+                const th = 0.8 + rand() * 1.2;
+                
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.4), trunkMaterial);
+                trunk.position.y = 0.2;
+                tree.add(trunk);
+                
+                const leaves = new THREE.Mesh(new THREE.ConeGeometry(0.4, th, 8), leavesMaterial);
+                leaves.position.y = 0.4 + th * 0.5;
+                tree.add(leaves);
+                
+                tree.position.set(hill.position.x + tx, hill.position.y + scaleY * 0.6, hill.position.z + tz);
+                group.add(tree);
+            }
+        }
 
         colliders.push({
             x: hill.position.x,
@@ -395,7 +476,8 @@ function handleWorldPointerDown(event) {
 }
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xb7d0e8);
+scene.background = new THREE.Color(0x0a101a);
+scene.fog = new THREE.FogExp2(0x0a101a, 0.012);
 
 const world = new CANNON.World({
     gravity: new CANNON.Vec3(0, -9.82, 0),
@@ -448,16 +530,37 @@ const droneFrontCameraRight = new THREE.PerspectiveCamera(76, MINI_CAM_WIDTH / M
 droneFrontCameraRight.position.set(FPV_EYE_SEPARATION * 0.5 + FPV_RIGHT_EYE_SHIFT, 0.12, -0.56);
 droneFrontCameraRight.rotation.y = 0;
 
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+const ambientLight = new THREE.HemisphereLight(0x39d8ff, 0x0a101a, 0.45);
 scene.add(ambientLight);
 
-const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
-directionalLight.position.set(8, 14, 10);
+const directionalLight = new THREE.DirectionalLight(0xffffff, 1.25);
+directionalLight.position.set(12, 24, 18);
+directionalLight.castShadow = true;
 scene.add(directionalLight);
 
-const groundVisualMaterial = new THREE.MeshStandardMaterial({ color: 0x646c75 });
+const canvas = document.createElement('canvas');
+canvas.width = 128;
+canvas.height = 128;
+const ctx = canvas.getContext('2d');
+ctx.fillStyle = '#0a101a';
+ctx.fillRect(0, 0, 128, 128);
+ctx.strokeStyle = '#1a2e4a';
+ctx.lineWidth = 2;
+ctx.strokeRect(0, 0, 128, 128);
+
+const gridTexture = new THREE.CanvasTexture(canvas);
+gridTexture.wrapS = THREE.RepeatWrapping;
+gridTexture.wrapT = THREE.RepeatWrapping;
+gridTexture.repeat.set(60, 60);
+
+const groundVisualMaterial = new THREE.MeshStandardMaterial({ 
+    map: gridTexture,
+    roughness: 0.85,
+    metalness: 0.15
+});
+
 const groundMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(220, 220),
+    new THREE.CircleGeometry(240, 64),
     groundVisualMaterial
 );
 groundMesh.rotation.x = -Math.PI / 2;
@@ -531,10 +634,12 @@ scene.add(correctionArrow);
 
 const trayHalfExtents = new CANNON.Vec3(0.6, 0.06, 0.6);
 const trayBody = new CANNON.Body({
-    type: CANNON.Body.KINEMATIC,
-    mass: 0,
+    type: CANNON.Body.DYNAMIC,
+    mass: DRONE_MASS,
     material: trayPhysMaterial,
     position: new CANNON.Vec3(0, DRONE_HEIGHT + TRAY_OFFSET_Y, 0),
+    linearDamping: DRONE_LINEAR_DAMPING,
+    angularDamping: DRONE_ANGULAR_DAMPING,
 });
 
 const trayWallThickness = 0.06;
@@ -687,6 +792,12 @@ const windImpulse = {
     pitch: 0,
     yaw: 0,
 };
+
+// PID State Accumulators
+let pidIntegralRoll = 0;
+let pidIntegralPitch = 0;
+let pidIntegralYaw = 0;
+let pidIntegralAltitude = 0;
 
 const MIRROR_STATE_CHANNEL_NAME = 'drones-project-mirror-state';
 const MIRROR_STATE_STORAGE_KEY = 'drones-project-mirror-state';
@@ -1967,21 +2078,28 @@ function setOverlayMessage(message) {
     }
 }
 
-function setTrayKinematic() {
-    trayBody.type = CANNON.Body.KINEMATIC;
-    trayBody.mass = 0;
-    trayBody.linearDamping = 0;
-    trayBody.angularDamping = 0;
+function setTrayDynamicsEnabled(enabled) {
+    if (enabled) {
+        trayBody.type = CANNON.Body.DYNAMIC;
+        trayBody.mass = DRONE_MASS;
+        trayBody.linearDamping = DRONE_LINEAR_DAMPING;
+        trayBody.angularDamping = DRONE_ANGULAR_DAMPING;
+    } else {
+        trayBody.type = CANNON.Body.KINEMATIC;
+        trayBody.mass = 0;
+        trayBody.linearDamping = 0;
+        trayBody.angularDamping = 0;
+    }
     trayBody.updateMassProperties();
+    trayBody.wakeUp();
+}
+
+function setTrayKinematic() {
+    setTrayDynamicsEnabled(false);
 }
 
 function setTrayDynamic() {
-    trayBody.type = CANNON.Body.DYNAMIC;
-    trayBody.mass = 6.5;
-    trayBody.linearDamping = 0.22;
-    trayBody.angularDamping = 0.35;
-    trayBody.updateMassProperties();
-    trayBody.wakeUp();
+    setTrayDynamicsEnabled(true);
 }
 
 function triggerDroneCrash(impactVelocityX = 0, impactVelocityY = 0, impactVelocityZ = 0) {
@@ -2003,12 +2121,12 @@ function triggerDroneCrash(impactVelocityX = 0, impactVelocityY = 0, impactVeloc
     assistPulseCycle.pitchOn = false;
     assistPulseCycle.rollTimer = 0;
     assistPulseCycle.pitchTimer = 0;
-    windImpulse.x = 0;
-    windImpulse.y = 0;
-    windImpulse.z = 0;
-    windImpulse.roll = 0;
-    windImpulse.pitch = 0;
     windImpulse.yaw = 0;
+
+    pidIntegralRoll = 0;
+    pidIntegralPitch = 0;
+    pidIntegralYaw = 0;
+    pidIntegralAltitude = 0;
 
     autonomy.reset();
     clearPathVisualization();
@@ -2066,12 +2184,11 @@ function resetSimulation() {
     correctionActive = false;
     correctionArrow.visible = false;
     correctionArrow.scale.setScalar(0.001);
-    windImpulse.x = 0;
-    windImpulse.y = 0;
-    windImpulse.z = 0;
-    windImpulse.roll = 0;
-    windImpulse.pitch = 0;
     windImpulse.yaw = 0;
+    pidIntegralRoll = 0;
+    pidIntegralPitch = 0;
+    pidIntegralYaw = 0;
+    pidIntegralAltitude = 0;
     autonomy.reset();
     clearPathVisualization();
     setOverlayMessage('The ball is out of the tray');
@@ -2639,33 +2756,84 @@ function handleGamepadToggles() {
     prevGamepadRBPressed = rbPressed;
 }
 
+const trayLocalUp = new CANNON.Vec3(0, 1, 0);
+const trayWorldUp = new CANNON.Vec3();
+const trayEuler = new THREE.Euler();
+const trayQuatForEuler = new THREE.Quaternion();
+
 function updateTrayBody() {
     if (droneCrashed) {
         return;
     }
 
-    const desiredY = Math.max(
-        trayBody.position.y + movement.y * FIXED_TIME_STEP,
-        MIN_ALTITUDE + TRAY_OFFSET_Y
+    // 1. Calculate Target Attitude Errors (PD Control)
+    trayQuatForEuler.set(
+        trayBody.quaternion.x,
+        trayBody.quaternion.y,
+        trayBody.quaternion.z,
+        trayBody.quaternion.w
     );
-    const clampedYDelta = THREE.MathUtils.clamp(
-        desiredY - trayBody.position.y,
-        -MAX_VERTICAL_STEP,
-        MAX_VERTICAL_STEP
+    trayEuler.setFromQuaternion(trayQuatForEuler, 'YXZ');
+
+    const targetPitch = movement.pitch;
+    const targetRoll = movement.roll;
+    const targetYawRate = targetMovement.yawRate;
+
+    const pitchError = targetPitch - trayEuler.x;
+    const rollError = targetRoll - trayEuler.z;
+    const yawRateError = targetYawRate - trayBody.angularVelocity.y;
+
+    // Accumulate Integral Errors with Anti-Windup
+    pidIntegralPitch = THREE.MathUtils.clamp(pidIntegralPitch + pitchError * FIXED_TIME_STEP, -PID_INTEGRAL_MAX, PID_INTEGRAL_MAX);
+    pidIntegralRoll = THREE.MathUtils.clamp(pidIntegralRoll + rollError * FIXED_TIME_STEP, -PID_INTEGRAL_MAX, PID_INTEGRAL_MAX);
+    pidIntegralYaw = THREE.MathUtils.clamp(pidIntegralYaw + yawRateError * FIXED_TIME_STEP, -PID_INTEGRAL_MAX, PID_INTEGRAL_MAX);
+
+    const pitchTorque = pitchError * DRONE_ATTITUDE_KP + pidIntegralPitch * DRONE_ATTITUDE_KI - trayBody.angularVelocity.x * DRONE_ATTITUDE_KD;
+    const rollTorque = rollError * DRONE_ATTITUDE_KP + pidIntegralRoll * DRONE_ATTITUDE_KI - trayBody.angularVelocity.z * DRONE_ATTITUDE_KD;
+    const yawTorque = yawRateError * DRONE_YAW_KP + pidIntegralYaw * DRONE_YAW_KI;
+
+    trayBody.torque.set(pitchTorque, yawTorque, rollTorque);
+
+    // 2. Calculate Vertical Control (Throttle)
+    const currentAltitude = trayBody.position.y;
+    const verticalVel = trayBody.velocity.y;
+    
+    // In dynamic mode, targetMovement.y is treated as a desired velocity
+    const velocityErrorY = targetMovement.y - verticalVel;
+
+    // Accumulate Altitude Integral with Anti-Windup
+    pidIntegralAltitude = THREE.MathUtils.clamp(pidIntegralAltitude + velocityErrorY * FIXED_TIME_STEP, -PID_INTEGRAL_MAX * 2, PID_INTEGRAL_MAX * 2);
+
+    const thrustY = DRONE_THRUST_COMPENSATION + (velocityErrorY * DRONE_ALTITUDE_KD) + (pidIntegralAltitude * DRONE_ALTITUDE_KI) + (input.throttle * DRONE_THRUST_GAIN);
+    
+    // Apply thrust along local up
+    trayBody.quaternion.vmult(trayLocalUp, trayWorldUp);
+    trayBody.force.set(
+        trayWorldUp.x * thrustY,
+        trayWorldUp.y * thrustY,
+        trayWorldUp.z * thrustY
     );
 
-    let targetX = trayBody.position.x + movement.x * FIXED_TIME_STEP;
-    let targetZ = trayBody.position.z + movement.z * FIXED_TIME_STEP;
-    const targetY = trayBody.position.y + clampedYDelta;
+    // 3. Wind and External Impulses
+    if (windImpulse.x || windImpulse.y || windImpulse.z || windImpulse.roll || windImpulse.pitch || windImpulse.yaw) {
+        trayBody.force.x += windImpulse.x * 12.0;
+        trayBody.force.y += windImpulse.y * 8.0;
+        trayBody.force.z += windImpulse.z * 12.0;
+        trayBody.torque.x += windImpulse.pitch * 6.0;
+        trayBody.torque.y += windImpulse.yaw * 6.5;
+        trayBody.torque.z += windImpulse.roll * 6.0;
+    }
+
+    // 4. Obstacle Collision Detection (Visual Only Check)
     const trayHalfX = trayHalfExtents.x;
     const trayHalfY = trayHalfExtents.y + trayWallHeight;
     const trayHalfZ = trayHalfExtents.z;
 
     for (let index = 0; index < activeObstacleColliders.length; index += 1) {
         const obstacle = activeObstacleColliders[index];
-        const overlapsX = Math.abs(targetX - obstacle.x) <= (trayHalfX + obstacle.hx + OBSTACLE_COLLISION_PADDING);
-        const overlapsY = Math.abs(targetY - obstacle.y) <= (trayHalfY + obstacle.hy + OBSTACLE_COLLISION_PADDING);
-        const overlapsZ = Math.abs(targetZ - obstacle.z) <= (trayHalfZ + obstacle.hz + OBSTACLE_COLLISION_PADDING);
+        const overlapsX = Math.abs(trayBody.position.x - obstacle.x) <= (trayHalfX + obstacle.hx + OBSTACLE_COLLISION_PADDING);
+        const overlapsY = Math.abs(trayBody.position.y - obstacle.y) <= (trayHalfY + obstacle.hy + OBSTACLE_COLLISION_PADDING);
+        const overlapsZ = Math.abs(trayBody.position.z - obstacle.z) <= (trayHalfZ + obstacle.hz + OBSTACLE_COLLISION_PADDING);
 
         if (overlapsX && overlapsY && overlapsZ) {
             triggerDroneCrash(
@@ -2676,30 +2844,6 @@ function updateTrayBody() {
             break;
         }
     }
-
-    if (droneCrashed) {
-        return;
-    }
-
-    trayPos.set(targetX, targetY, targetZ);
-
-    const velocityX = (targetX - trayBody.position.x) / FIXED_TIME_STEP;
-    const velocityZ = (targetZ - trayBody.position.z) / FIXED_TIME_STEP;
-    trayBody.velocity.set(velocityX, clampedYDelta / FIXED_TIME_STEP, velocityZ);
-    trayBody.angularVelocity.set(0, 0, 0);
-
-    if (windImpulse.x || windImpulse.y || windImpulse.z || windImpulse.roll || windImpulse.pitch || windImpulse.yaw) {
-        trayBody.velocity.x += windImpulse.x * 9.5;
-        trayBody.velocity.y += windImpulse.y * 6.0;
-        trayBody.velocity.z += windImpulse.z * 9.5;
-        trayBody.angularVelocity.x += windImpulse.pitch * 5.0;
-        trayBody.angularVelocity.y += windImpulse.yaw * 5.5;
-        trayBody.angularVelocity.z += windImpulse.roll * 5.0;
-    }
-    trayBody.position.copy(trayPos);
-
-    trayQuat.setFromEuler(movement.pitch, movement.yaw, movement.roll, 'YXZ');
-    trayBody.quaternion.copy(trayQuat);
 }
 
 function syncVisuals() {
