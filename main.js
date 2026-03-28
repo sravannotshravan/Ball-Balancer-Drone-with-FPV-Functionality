@@ -117,10 +117,14 @@ const DRONE_THRUST_COMPENSATION = 9.82 * DRONE_MASS; // Hover thrust
 const DRONE_THRUST_GAIN = 11.5;
 const DRONE_ATTITUDE_KP = 18.5;
 const DRONE_ATTITUDE_KD = 6.8;
+const DRONE_ATTITUDE_KI = 2.45; // Integral gain for attitude
 const DRONE_YAW_KP = 14.5;
 const DRONE_YAW_KD = 5.2;
+const DRONE_YAW_KI = 1.05; // Integral gain for yaw
 const DRONE_ALTITUDE_KP = 12.0;
 const DRONE_ALTITUDE_KD = 7.5;
+const DRONE_ALTITUDE_KI = 3.65; // Integral gain for altitude
+const PID_INTEGRAL_MAX = 4.0;  // Anti-windup limit
 const DRONE_LINEAR_DAMPING = 0.42;
 const DRONE_ANGULAR_DAMPING = 0.58;
 
@@ -788,6 +792,12 @@ const windImpulse = {
     pitch: 0,
     yaw: 0,
 };
+
+// PID State Accumulators
+let pidIntegralRoll = 0;
+let pidIntegralPitch = 0;
+let pidIntegralYaw = 0;
+let pidIntegralAltitude = 0;
 
 const MIRROR_STATE_CHANNEL_NAME = 'drones-project-mirror-state';
 const MIRROR_STATE_STORAGE_KEY = 'drones-project-mirror-state';
@@ -2111,12 +2121,12 @@ function triggerDroneCrash(impactVelocityX = 0, impactVelocityY = 0, impactVeloc
     assistPulseCycle.pitchOn = false;
     assistPulseCycle.rollTimer = 0;
     assistPulseCycle.pitchTimer = 0;
-    windImpulse.x = 0;
-    windImpulse.y = 0;
-    windImpulse.z = 0;
-    windImpulse.roll = 0;
-    windImpulse.pitch = 0;
     windImpulse.yaw = 0;
+
+    pidIntegralRoll = 0;
+    pidIntegralPitch = 0;
+    pidIntegralYaw = 0;
+    pidIntegralAltitude = 0;
 
     autonomy.reset();
     clearPathVisualization();
@@ -2174,12 +2184,11 @@ function resetSimulation() {
     correctionActive = false;
     correctionArrow.visible = false;
     correctionArrow.scale.setScalar(0.001);
-    windImpulse.x = 0;
-    windImpulse.y = 0;
-    windImpulse.z = 0;
-    windImpulse.roll = 0;
-    windImpulse.pitch = 0;
     windImpulse.yaw = 0;
+    pidIntegralRoll = 0;
+    pidIntegralPitch = 0;
+    pidIntegralYaw = 0;
+    pidIntegralAltitude = 0;
     autonomy.reset();
     clearPathVisualization();
     setOverlayMessage('The ball is out of the tray');
@@ -2774,21 +2783,28 @@ function updateTrayBody() {
     const rollError = targetRoll - trayEuler.z;
     const yawRateError = targetYawRate - trayBody.angularVelocity.y;
 
-    const pitchTorque = pitchError * DRONE_ATTITUDE_KP - trayBody.angularVelocity.x * DRONE_ATTITUDE_KD;
-    const rollTorque = rollError * DRONE_ATTITUDE_KP - trayBody.angularVelocity.z * DRONE_ATTITUDE_KD;
-    const yawTorque = yawRateError * DRONE_YAW_KP;
+    // Accumulate Integral Errors with Anti-Windup
+    pidIntegralPitch = THREE.MathUtils.clamp(pidIntegralPitch + pitchError * FIXED_TIME_STEP, -PID_INTEGRAL_MAX, PID_INTEGRAL_MAX);
+    pidIntegralRoll = THREE.MathUtils.clamp(pidIntegralRoll + rollError * FIXED_TIME_STEP, -PID_INTEGRAL_MAX, PID_INTEGRAL_MAX);
+    pidIntegralYaw = THREE.MathUtils.clamp(pidIntegralYaw + yawRateError * FIXED_TIME_STEP, -PID_INTEGRAL_MAX, PID_INTEGRAL_MAX);
+
+    const pitchTorque = pitchError * DRONE_ATTITUDE_KP + pidIntegralPitch * DRONE_ATTITUDE_KI - trayBody.angularVelocity.x * DRONE_ATTITUDE_KD;
+    const rollTorque = rollError * DRONE_ATTITUDE_KP + pidIntegralRoll * DRONE_ATTITUDE_KI - trayBody.angularVelocity.z * DRONE_ATTITUDE_KD;
+    const yawTorque = yawRateError * DRONE_YAW_KP + pidIntegralYaw * DRONE_YAW_KI;
 
     trayBody.torque.set(pitchTorque, yawTorque, rollTorque);
 
     // 2. Calculate Vertical Control (Throttle)
     const currentAltitude = trayBody.position.y;
     const verticalVel = trayBody.velocity.y;
-    // We blend throttle input with an altitude-hold assist if no throttle is applied
-    const throttleBias = Math.abs(input.throttle) < 0.05 ? (DRONE_ALTITUDE_KP * (targetMovement.y === 0 ? 0 : 0)) : (input.throttle * DRONE_THRUST_GAIN);
     
     // In dynamic mode, targetMovement.y is treated as a desired velocity
     const velocityErrorY = targetMovement.y - verticalVel;
-    const thrustY = DRONE_THRUST_COMPENSATION + (velocityErrorY * DRONE_ALTITUDE_KD) + (input.throttle * DRONE_THRUST_GAIN);
+
+    // Accumulate Altitude Integral with Anti-Windup
+    pidIntegralAltitude = THREE.MathUtils.clamp(pidIntegralAltitude + velocityErrorY * FIXED_TIME_STEP, -PID_INTEGRAL_MAX * 2, PID_INTEGRAL_MAX * 2);
+
+    const thrustY = DRONE_THRUST_COMPENSATION + (velocityErrorY * DRONE_ALTITUDE_KD) + (pidIntegralAltitude * DRONE_ALTITUDE_KI) + (input.throttle * DRONE_THRUST_GAIN);
     
     // Apply thrust along local up
     trayBody.quaternion.vmult(trayLocalUp, trayWorldUp);
