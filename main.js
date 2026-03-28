@@ -70,6 +70,10 @@ const ASSIST_MICRO_TILT_MIN = 0.02;
 const ASSIST_MICRO_TILT_MAX = 0.09;
 const ASSIST_CENTER_KP = 0.52;
 const ASSIST_CENTER_KD = 0.24;
+const ASSIST_CENTER_TILT_KP = 1.1;
+const ASSIST_CENTER_TILT_KD = 0.42;
+const ASSIST_CENTER_TILT_MIN = 0.028;
+const ASSIST_CENTER_TILT_MAX = 0.12;
 const ASSIST_PULSE_STEP = 0.0035;
 const ASSIST_PULSE_DAMP = 0.86;
 const ASSIST_PULSE_POS_DEADBAND = 0.012;
@@ -77,7 +81,10 @@ const ASSIST_PULSE_VEL_DEADBAND = 0.03;
 const ASSIST_PULSE_ON_TIME = 0.05;
 const ASSIST_PULSE_OFF_TIME = 0.05;
 const ASSIST_EDGE_EMERGENCY_RATIO = 0.85;
-const ASSIST_EDGE_EMERGENCY_TILT = 0.06;
+const ASSIST_EDGE_EMERGENCY_TILT = 0.1;
+const ASSIST_MOVE_SPEED_SCALE = 0.62;
+const ASSIST_SWIRL_DAMPING = 0.78;
+const ASSIST_SWIRL_MIN_RADIUS = 0.06;
 const COMPASS_TAPE_STEP = 5;
 const COMPASS_PX_PER_DEG = 4;
 const COMPASS_RANGE_MIN = -720;
@@ -1322,6 +1329,10 @@ function isBallInsideTray() {
     );
 }
 
+function isBallEligibleForTrayAssist() {
+    return isBallInsideTray() && ballLocalPosition.y <= trayWallHeight + ballRadius + 0.08;
+}
+
 function getCenterRegionHalfSize() {
     return THREE.MathUtils.clamp(
         traySafeHalf * centerRegionRatio,
@@ -1390,6 +1401,33 @@ function computeMicroTiltTarget(position, velocity, edgeDanger) {
     }
 
     return THREE.MathUtils.clamp(correction, -tiltCap, tiltCap);
+}
+
+function computeDeliberateCenterTilt(position, velocity, edgeDanger) {
+    const deadbandPos = ASSIST_PULSE_POS_DEADBAND * 1.2;
+    const deadbandVel = ASSIST_PULSE_VEL_DEADBAND * 1.2;
+    if (Math.abs(position) < deadbandPos && Math.abs(velocity) < deadbandVel) {
+        return 0;
+    }
+
+    const rawCorrection = position * ASSIST_CENTER_TILT_KP + velocity * ASSIST_CENTER_TILT_KD;
+    const maxTilt = THREE.MathUtils.lerp(ASSIST_CENTER_TILT_MIN, ASSIST_CENTER_TILT_MAX, edgeDanger);
+    const minVisibleTilt = THREE.MathUtils.lerp(ASSIST_CENTER_TILT_MIN * 0.75, ASSIST_CENTER_TILT_MIN, edgeDanger);
+    let correction = THREE.MathUtils.clamp(rawCorrection, -maxTilt, maxTilt);
+
+    const centerwardVelocity = -Math.sign(position || 1) * velocity;
+    if (centerwardVelocity > 0.06) {
+        correction *= 0.45;
+    } else if (centerwardVelocity < -0.03) {
+        correction *= 1.2;
+    }
+
+    if (Math.abs(position) > deadbandPos * 2.2 && Math.abs(correction) < minVisibleTilt) {
+        const direction = Math.sign(rawCorrection !== 0 ? rawCorrection : position);
+        correction = direction * minVisibleTilt;
+    }
+
+    return THREE.MathUtils.clamp(correction, -maxTilt, maxTilt);
 }
 
 function updatePulsePhase(timerValue, phaseOn) {
@@ -1543,6 +1581,10 @@ function resetSimulation() {
 }
 
 function applyEdgeBounceAssist() {
+    if (!isBallEligibleForTrayAssist()) {
+        return;
+    }
+
     if (edgeBounceCooldown > 0) {
         edgeBounceCooldown -= FIXED_TIME_STEP;
         return;
@@ -1585,7 +1627,7 @@ function applyEdgeBounceAssist() {
 }
 
 function applyCenterLockAssist() {
-    if (!assistedMode) {
+    if (!assistedMode || !isBallEligibleForTrayAssist()) {
         return;
     }
 
@@ -1779,76 +1821,54 @@ function updateMovementState() {
             assistPulseCycle.rollTimer = 0;
             assistPulseCycle.pitchTimer = 0;
         } else {
-            const intentRoll = pilotPlanarNeutral ? 0 : input.moveX * ASSIST_INTENT_GAIN;
-            const intentPitch = pilotPlanarNeutral ? 0 : -input.moveZ * ASSIST_INTENT_GAIN;
+            assistPulseCycle.rollOn = false;
+            assistPulseCycle.pitchOn = false;
+            assistPulseCycle.rollTimer = 0;
+            assistPulseCycle.pitchTimer = 0;
+            assistPulseTilt.roll = 0;
+            assistPulseTilt.pitch = 0;
 
-            const rollCorrection = -(ballLocalPosition.x * ASSIST_CENTER_KP + ballLocalVelocity.x * ASSIST_CENTER_KD);
-            const pitchCorrection = -ballLocalPosition.z * ASSIST_CENTER_KP - ballLocalVelocity.z * ASSIST_CENTER_KD;
-            const rollNearDeadband =
-                Math.abs(ballLocalPosition.x) < ASSIST_PULSE_POS_DEADBAND &&
-                Math.abs(ballLocalVelocity.x) < ASSIST_PULSE_VEL_DEADBAND;
-            const pitchNearDeadband =
-                Math.abs(ballLocalPosition.z) < ASSIST_PULSE_POS_DEADBAND &&
-                Math.abs(ballLocalVelocity.z) < ASSIST_PULSE_VEL_DEADBAND;
+            // Drive roll and pitch directly from ball local X/Z so centering is deliberate and visible.
+            // User-requested simple mapping:
+            // ballLocalX < 0 -> roll < 0
+            // ballLocalZ < 0 -> pitch > 0
+            const radialDistance = Math.hypot(ballLocalPosition.x, ballLocalPosition.z);
+            let filteredLocalVelX = ballLocalVelocity.x;
+            let filteredLocalVelZ = ballLocalVelocity.z;
 
-            if (rollNearDeadband) {
-                assistPulseCycle.rollOn = false;
-                assistPulseCycle.rollTimer = 0;
-                assistPulseTilt.roll = 0;
-            } else {
-                const rollPhase = updatePulsePhase(assistPulseCycle.rollTimer, assistPulseCycle.rollOn);
-                assistPulseCycle.rollOn = rollPhase.phaseOn;
-                assistPulseCycle.rollTimer = rollPhase.timer;
-                if (assistPulseCycle.rollOn) {
-                    const cap = THREE.MathUtils.lerp(ASSIST_MICRO_TILT_MIN, ASSIST_MICRO_TILT_MAX, edgeDanger);
-                    assistPulseTilt.roll = Math.sign(rollCorrection) * cap;
+            if (radialDistance > ASSIST_SWIRL_MIN_RADIUS) {
+                const tangentX = -ballLocalPosition.z / radialDistance;
+                const tangentZ = ballLocalPosition.x / radialDistance;
+                const tangentialSpeed =
+                    ballLocalVelocity.x * tangentX +
+                    ballLocalVelocity.z * tangentZ;
+
+                filteredLocalVelX -= tangentX * tangentialSpeed * ASSIST_SWIRL_DAMPING;
+                filteredLocalVelZ -= tangentZ * tangentialSpeed * ASSIST_SWIRL_DAMPING;
+            }
+
+            let localRollCorrection = computeDeliberateCenterTilt(ballLocalPosition.x, filteredLocalVelX, edgeDanger);
+            let localPitchCorrection = computeDeliberateCenterTilt(-ballLocalPosition.z, -filteredLocalVelZ, edgeDanger);
+
+            // In corner states, prioritize the dominant axis to avoid corner-to-corner ping-pong.
+            if (edgeRatio > 0.82) {
+                if (Math.abs(ballLocalPosition.x) > Math.abs(ballLocalPosition.z)) {
+                    localPitchCorrection *= 0.4;
                 } else {
-                    assistPulseTilt.roll = 0;
+                    localRollCorrection *= 0.4;
                 }
             }
 
-            if (pitchNearDeadband) {
-                assistPulseCycle.pitchOn = false;
-                assistPulseCycle.pitchTimer = 0;
-                assistPulseTilt.pitch = 0;
-            } else {
-                const pitchPhase = updatePulsePhase(assistPulseCycle.pitchTimer, assistPulseCycle.pitchOn);
-                assistPulseCycle.pitchOn = pitchPhase.phaseOn;
-                assistPulseCycle.pitchTimer = pitchPhase.timer;
-                if (assistPulseCycle.pitchOn) {
-                    const cap = THREE.MathUtils.lerp(ASSIST_MICRO_TILT_MIN, ASSIST_MICRO_TILT_MAX, edgeDanger);
-                    assistPulseTilt.pitch = Math.sign(pitchCorrection) * cap;
-                } else {
-                    assistPulseTilt.pitch = 0;
-                }
-            }
+            let baseRoll = localRollCorrection + effectiveRollInput * ASSIST_STICK_BLEND;
+            let basePitch = localPitchCorrection + effectivePitchInput * ASSIST_STICK_BLEND;
 
-            let baseRoll = assistPulseTilt.roll + intentRoll + effectiveRollInput * ASSIST_STICK_BLEND;
-            let basePitch = assistPulseTilt.pitch + intentPitch + effectivePitchInput * ASSIST_STICK_BLEND;
-
-            if (pilotPlanarNeutral && !assistPulseCycle.rollOn) {
+            if (forwardStickOverride) {
                 baseRoll = 0;
             }
 
-            if (pilotPlanarNeutral && !assistPulseCycle.pitchOn) {
-                basePitch = 0;
-            }
-
             if (edgeRatio > ASSIST_EDGE_EMERGENCY_RATIO) {
-                baseRoll = assistPulseCycle.rollOn
-                    ? THREE.MathUtils.clamp(
-                        -ballLocalPosition.x * ASSIST_CENTER_KP,
-                        -ASSIST_EDGE_EMERGENCY_TILT,
-                        ASSIST_EDGE_EMERGENCY_TILT
-                    )
-                    : 0;
-                basePitch = assistPulseCycle.pitchOn
-                    ? THREE.MathUtils.clamp(
-                        -ballLocalPosition.z * ASSIST_CENTER_KP,
-                        -ASSIST_EDGE_EMERGENCY_TILT,
-                        ASSIST_EDGE_EMERGENCY_TILT
-                    )
-                    : 0;
+                baseRoll = THREE.MathUtils.clamp(baseRoll, -ASSIST_EDGE_EMERGENCY_TILT, ASSIST_EDGE_EMERGENCY_TILT);
+                basePitch = THREE.MathUtils.clamp(basePitch, -ASSIST_EDGE_EMERGENCY_TILT, ASSIST_EDGE_EMERGENCY_TILT);
             }
 
             if (shouldAutoLevel) {
@@ -1918,6 +1938,11 @@ function updateMovementState() {
         }
     }
 
+    if (assistedMode) {
+        rightCommand *= ASSIST_MOVE_SPEED_SCALE;
+        forwardCommand *= ASSIST_MOVE_SPEED_SCALE;
+    }
+
     const commandYaw = movement.yaw + targetMovement.yawRate * FIXED_TIME_STEP;
     const cosYaw = Math.cos(commandYaw);
     const sinYaw = Math.sin(commandYaw);
@@ -1971,10 +1996,8 @@ function updateMovementState() {
     if (assistedMode && pilotPlanarNeutral) {
         movement.x = THREE.MathUtils.lerp(movement.x, 0, ASSIST_STOP_DAMPING);
         movement.z = THREE.MathUtils.lerp(movement.z, 0, ASSIST_STOP_DAMPING);
-        if (!assistPulseCycle.rollOn) {
+        if (inCenterRegion) {
             movement.roll = THREE.MathUtils.lerp(movement.roll, 0, 0.45);
-        }
-        if (!assistPulseCycle.pitchOn) {
             movement.pitch = THREE.MathUtils.lerp(movement.pitch, 0, 0.45);
         }
     }
