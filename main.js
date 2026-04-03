@@ -1913,19 +1913,23 @@ function updateMovementState() {
 
     if (autoBalance || assistedMode) {
         // Adjust pitch and roll directly relative to ball's local position
-        const pGain = 1.25;
-        const dGain = 0.5;
+        const pGain = ASSIST_STABILIZE_P * 0.45;
+        const dGain = ASSIST_STABILIZE_D * 1.5;
         
         let desiredRoll = ballLocalPosition.x * pGain + ballLocalVelocity.x * dGain;
         let desiredPitch = -ballLocalPosition.z * pGain - ballLocalVelocity.z * dGain;
+
+        // Reduce over-reaction near the edges to prevent excessive pin-balling
+        desiredRoll *= THREE.MathUtils.clamp(1.0 - Math.abs(ballLocalVelocity.x) * 0.1, 0.2, 1.0);
+        desiredPitch *= THREE.MathUtils.clamp(1.0 - Math.abs(ballLocalVelocity.z) * 0.1, 0.2, 1.0);
         
         if (forwardStickOverride) {
             desiredRoll = 0;
             desiredPitch = THREE.MathUtils.clamp(-effectivePitchInput * TILT_LIMIT * 0.82, -TILT_LIMIT, TILT_LIMIT);
         }
         
-        targetMovement.roll = THREE.MathUtils.clamp(desiredRoll + effectiveRollInput * 0.5, -TILT_LIMIT, TILT_LIMIT);
-        targetMovement.pitch = THREE.MathUtils.clamp(desiredPitch - effectivePitchInput * 0.5, -TILT_LIMIT, TILT_LIMIT);
+        targetMovement.roll = THREE.MathUtils.clamp(desiredRoll + effectiveRollInput * 0.5, -TILT_LIMIT * 1.25, TILT_LIMIT * 1.25);
+        targetMovement.pitch = THREE.MathUtils.clamp(desiredPitch - effectivePitchInput * 0.5, -TILT_LIMIT * 1.25, TILT_LIMIT * 1.25);
         
         if (shouldAutoLevel) {
             targetMovement.roll = 0;
