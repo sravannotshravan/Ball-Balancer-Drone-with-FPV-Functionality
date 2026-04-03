@@ -586,6 +586,14 @@ let centerRegionRatio = CENTER_REGION_RATIO_DEFAULT;
 let centerHoldActive = false;
 let edgeBounceCooldown = 0;
 let debugHudVisible = false;
+let autonomousNavigationEnabled = false;
+const autonomousWaypoints = [
+    new THREE.Vector3(0, 15, -40),
+    new THREE.Vector3(40, 15, 0),
+    new THREE.Vector3(0, 15, 40),
+    new THREE.Vector3(-40, 15, 0),
+];
+let currentWaypointIndex = 0;
 let prevGamepadYPressed = false;
 let prevGamepadXPressed = false;
 let correctionArrowScale = 0;
@@ -807,6 +815,13 @@ function publishMirrorState() {
 }
 
 window.addEventListener('keydown', (event) => {
+    if (event.code === 'KeyN') {
+        autonomousNavigationEnabled = !autonomousNavigationEnabled;
+        if (autonomousNavigationEnabled) {
+            assistedMode = true; // Auto-enable assist mode to help keep ball balanced
+            autoBalance = true;
+        }
+    }
     if (event.code === 'KeyB') {
         autoBalance = !autoBalance;
     }
@@ -1798,6 +1813,48 @@ if (resetButton) {
     resetButton.addEventListener('click', resetSimulation);
 }
 
+const waypointMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(1.5, 8, 8),
+    new THREE.MeshStandardMaterial({
+        color: 0x00ffcc,
+        emissive: 0x00ffcc,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.8
+    })
+);
+waypointMarker.visible = false;
+scene.add(waypointMarker);
+
+function updateAutonomousNavigation() {
+    const target = autonomousWaypoints[currentWaypointIndex];
+    waypointMarker.position.copy(target);
+    waypointMarker.visible = true;
+
+    const dx = target.x - droneBody.position.x;
+    const dz = target.z - droneBody.position.z;
+    const distanceSq = dx * dx + dz * dz;
+
+    if (distanceSq < 400) { // 20 units distance
+        currentWaypointIndex = (currentWaypointIndex + 1) % autonomousWaypoints.length;
+        return;
+    }
+
+    const angleToTarget = Math.atan2(-dx, -dz);
+    let diff = angleToTarget - movement.yaw;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+
+    const turnScale = 1.2;
+    input.autonomousTurnAmount = THREE.MathUtils.clamp(diff * turnScale, -1, 1);
+    
+    if (Math.abs(diff) < 0.4) {
+        input.autonomousPitchAmount = 0.5; // Pitch forward (positive pitch flies forward)
+    } else {
+        input.autonomousPitchAmount = 0.15;
+    }
+}
+
 function updateMovementState() {
     const edgeRatio = Math.max(
         Math.abs(ballLocalPosition.x) / Math.max(0.001, traySafeHalf),
@@ -2368,6 +2425,13 @@ function animate() {
     if (!droneCrashed) {
         updateInput();
         handleGamepadToggles();
+        if (autonomousNavigationEnabled) {
+            updateAutonomousNavigation();
+        } else {
+            input.autonomousTurnAmount = 0;
+            input.autonomousPitchAmount = 0;
+            waypointMarker.visible = false;
+        }
     }
     updateBallLocalState();
     updateWindImpulse();

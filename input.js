@@ -5,6 +5,8 @@ export const input = {
     pitch: 0,
     yaw: 0,
     throttle: 0,
+    autonomousTurnAmount: 0,
+    autonomousPitchAmount: 0,
 };
 
 export let activeInputSource = 'keyboard';
@@ -102,8 +104,8 @@ function recomputeUnifiedInput() {
     input.moveX = clampInput(keyboard.moveX);
     input.moveZ = clampInput(keyboard.moveZ);
     input.roll = clampInput(keyboard.roll + gamepad.roll);
-    input.pitch = clampInput(keyboard.pitch + gamepad.pitch);
-    input.yaw = clampInput(keyboard.yaw + gamepad.yaw);
+    input.pitch = clampInput(keyboard.pitch + gamepad.pitch + input.autonomousPitchAmount);
+    input.yaw = clampInput(keyboard.yaw + gamepad.yaw + input.autonomousTurnAmount);
     input.throttle = clampInput(keyboard.throttle + gamepad.throttle);
 }
 

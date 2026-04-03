@@ -638,6 +638,9 @@
                             el.classList.add('visible');
                         }
 
+                        const gh = doc.getElementById('game-hud');
+                        if (gh) gh.classList.add('hidden');
+
                         const toast = doc.createElement('div');
                         toast.textContent = '[ F3 pressed ]';
                         toast.style.cssText = 'position:fixed;top:40%;left:50%;transform:translate(-50%,-50%) scale(1.5);background:rgba(255, 211, 111, 0.95);color:#000;padding:12px 24px;border-radius:12px;font-weight:900;font-size:24px;font-family:system-ui,sans-serif;opacity:0;transition:all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);z-index:999999;box-shadow:0 10px 30px rgba(0,0,0,0.5);pointer-events:none;';
@@ -661,6 +664,9 @@
                             el.classList.remove('visible');
                             el.classList.add('hidden');
                         }
+
+                        const gh = doc.getElementById('game-hud');
+                        if (gh) gh.classList.remove('hidden');
                     }
                 },
                 { 
