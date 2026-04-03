@@ -1,0 +1,71 @@
+Run the project
+
+If you do not want Docker:
+
+Windows:
+
+start-server.bat
+
+macOS or Linux:
+
+sh run-local.sh
+
+If you prefer to run it manually:
+
+npm install
+
+npm start
+
+Open:
+
+Desktop view: http://localhost:4173/
+Mobile view: http://localhost:4173/mobile.html
+
+If you want Docker:
+
+Windows:
+
+run-docker.bat
+
+macOS or Linux:
+
+sh run.sh
+
+If you want to execute it directly:
+
+chmod +x run.sh
+
+./run.sh
+
+Build the image manually:
+
+docker build -t drones-project-gemini -f Dockerfile .
+
+Run the container manually:
+
+docker run --rm -p 4173:4173 --name drones-project-gemini drones-project-gemini
+
+Open:
+
+Desktop view: http://localhost:4173/
+Mobile view: http://localhost:4173/mobile.html
+
+Optional Docker Compose:
+
+docker compose up --build
+
+docker compose down
+
+Troubleshooting on Windows:
+
+If you see "failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine", Docker Desktop is not running or the Linux engine is not ready yet.
+
+1. Start Docker Desktop.
+2. Wait until Docker shows that the engine is running.
+3. Try the build command again from this project folder.
+
+If it still fails, open a new PowerShell window and run:
+
+docker info
+
+If that command cannot connect either, Docker Desktop still needs to be started or repaired before this project can be built.

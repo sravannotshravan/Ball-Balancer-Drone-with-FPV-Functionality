@@ -426,6 +426,18 @@ body.stereo-fpv #debug-hud {
     pointer-events: none;
 }
 
+#overlay.crash-mode {
+    inset: 0;
+    left: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(4, 8, 12, 0.72);
+    backdrop-filter: blur(2px);
+    pointer-events: auto;
+}
+
 #overlay.hidden {
     display: none;
 }
@@ -440,6 +452,15 @@ body.stereo-fpv #debug-hud {
     color: #ecf5ff;
     text-align: left;
     box-shadow: 0 14px 28px rgba(0, 0, 0, 0.45);
+}
+
+#overlay.crash-mode .overlay-card {
+    min-width: min(86vw, 520px);
+    max-width: min(86vw, 520px);
+    text-align: center;
+    border: 1px solid rgba(255, 140, 140, 0.55);
+    background: linear-gradient(180deg, rgba(34, 8, 8, 0.94), rgba(12, 5, 5, 0.96));
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.55);
 }
 
 .overlay-card h2 {

@@ -11,11 +11,29 @@ A browser-based drone simulation with a front-mounted camera, tray-ball balancin
 - Stereo VR-style split view on mobile with double-tap / double-click toggle
 - City and mountain plains environments
 
+## Tutorial
+
+Open [tutorial.html](tutorial.html) for a full documentation page with a live interface preview and UI highlights. You can print that page to PDF from your browser to capture the tutorial layout.
+
 ## Requirements
 
 - Node.js 18 or newer
 
 ## Run locally
+
+### Windows
+
+```bat
+start-server.bat
+```
+
+### macOS or Linux
+
+```bash
+sh run-local.sh
+```
+
+If you prefer to run it manually:
 
 ```bash
 npm install
@@ -26,6 +44,72 @@ Then open:
 
 - Desktop view: http://localhost:4173/
 - Mobile view: http://localhost:4173/mobile.html
+
+## Run with the Dockerfile
+
+The `Dockerfile` starts `server.js`, listens on port `4173`, and serves the app at `localhost:4173` in your browser.
+
+Build the image from the `Dockerfile`:
+
+```bash
+docker build -t drones-project-gemini -f Dockerfile .
+```
+
+Run the container:
+
+```bash
+docker run --rm -p 4173:4173 --name drones-project-gemini drones-project-gemini
+```
+
+Then open:
+
+- Desktop view: http://localhost:4173/
+- Mobile view: http://localhost:4173/mobile.html
+
+## Run with Docker Compose (recommended)
+
+```bash
+docker compose up --build
+```
+
+This uses `docker-compose.yml` and automatically sets:
+
+- Port mapping `4173:4173`
+- `HOST=0.0.0.0` inside the container
+- `PORT=4173`
+
+Stop with:
+
+```bash
+docker compose down
+```
+
+## Helper scripts
+
+### Windows
+
+```bat
+run-docker.bat
+```
+
+### macOS or Linux
+
+```bash
+sh run.sh
+```
+
+If you want to execute it directly:
+
+```bash
+chmod +x run.sh
+./run.sh
+```
+
+These scripts build the Docker image and start the app on http://localhost:4173/.
+
+## Run from Docker Desktop UI
+
+Use **Containers** or **Compose** with `docker-compose.yml` instead of running the image directly. This avoids missing port mappings in the UI run dialog.
 
 ## Controls
 

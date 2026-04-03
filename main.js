@@ -104,6 +104,11 @@ const ENV_MODE_CITY = 'city';
 const ENV_MODE_MOUNTAIN = 'mountain';
 const OBSTACLE_COLLISION_PADDING = 0.05;
 const FRONT_SENSOR_MAX_RANGE = 120;
+const DRONE_CRASH_IMPACT_SPEED = 2.35;
+const DRONE_CRASH_TILT_THRESHOLD = 0.2;
+const DRONE_CRASH_ANGULAR_BOOST = 5.2;
+const DRONE_CRASH_GAME_OVER_DELAY = 0.6;
+const DRONE_CRASH_SETTLE_SPEED = 0.65;
 
 const currentPage = window.location.pathname.toLowerCase();
 const isMobileFrontView = currentPage.endsWith('/mobile.html') || currentPage.endsWith('mobile.html');
@@ -588,6 +593,10 @@ let correctionActive = false;
 let environmentMode = ENV_MODE_CITY;
 let mobileStereoFpvEnabled = false;
 let lastMobileTapTime = 0;
+let droneCrashed = false;
+let crashMessage = '';
+let crashElapsedTime = 0;
+let crashGameOverShown = false;
 const windImpulse = {
     x: 0,
     y: 0,
@@ -842,6 +851,7 @@ const telemetry = {
 const centerRegionSlider = document.getElementById('center-region-slider');
 const centerRegionValue = document.getElementById('center-region-value');
 const overlay = document.getElementById('overlay');
+const overlayTitle = overlay ? overlay.querySelector('h2') : null;
 const resetButton = document.getElementById('reset-btn');
 const debugHud = document.getElementById('debug-hud');
 const gameHud = document.getElementById('game-hud');
@@ -1531,6 +1541,56 @@ function setOverlayVisible(visible) {
     overlay.classList.toggle('hidden', !visible);
 }
 
+function setCrashOverlayMode(enabled) {
+    if (!overlay) {
+        return;
+    }
+    overlay.classList.toggle('crash-mode', enabled);
+}
+
+function setOverlayMessage(message) {
+    if (!overlayTitle) {
+        return;
+    }
+    overlayTitle.textContent = message;
+}
+
+function crashDrone(reason, impactVelocity = null) {
+    if (droneCrashed) {
+        return;
+    }
+
+    droneCrashed = true;
+    crashMessage = reason || 'Drone crashed';
+    crashElapsedTime = 0;
+    crashGameOverShown = false;
+    setOverlayVisible(false);
+
+    autoBalance = false;
+    assistedMode = false;
+    centerHoldActive = false;
+    correctionActive = false;
+    correctionArrow.visible = false;
+
+    trayBody.type = CANNON.Body.DYNAMIC;
+    trayBody.mass = 5;
+    trayBody.linearDamping = 0.16;
+    trayBody.angularDamping = 0.1;
+    trayBody.updateMassProperties();
+
+    if (impactVelocity) {
+        trayBody.velocity.set(impactVelocity.x, impactVelocity.y, impactVelocity.z);
+    }
+
+    trayBody.angularVelocity.set(
+        movement.pitch * DRONE_CRASH_ANGULAR_BOOST + (Math.random() - 0.5) * 1.2,
+        movement.yawRate * DRONE_CRASH_ANGULAR_BOOST * 0.7,
+        movement.roll * DRONE_CRASH_ANGULAR_BOOST + (Math.random() - 0.5) * 1.2
+    );
+    trayBody.wakeUp();
+    ballBody.wakeUp();
+}
+
 function resetSimulation() {
     movement.x = 0;
     movement.z = 0;
@@ -1554,6 +1614,16 @@ function resetSimulation() {
     assistPulseCycle.rollTimer = 0;
     assistPulseCycle.pitchTimer = 0;
 
+    droneCrashed = false;
+    crashMessage = '';
+    crashElapsedTime = 0;
+    crashGameOverShown = false;
+
+    trayBody.type = CANNON.Body.KINEMATIC;
+    trayBody.mass = 0;
+    trayBody.linearDamping = 0;
+    trayBody.angularDamping = 0;
+    trayBody.updateMassProperties();
     trayBody.position.set(0, DRONE_HEIGHT + TRAY_OFFSET_Y, 0);
     trayBody.velocity.set(0, 0, 0);
     trayBody.angularVelocity.set(0, 0, 0);
@@ -1577,6 +1647,8 @@ function resetSimulation() {
     windImpulse.roll = 0;
     windImpulse.pitch = 0;
     windImpulse.yaw = 0;
+    setCrashOverlayMode(false);
+    setOverlayMessage('The ball is out of the tray');
     setOverlayVisible(false);
 }
 
@@ -2095,6 +2167,11 @@ function updateTrayBody() {
     let targetX = trayBody.position.x + movement.x * FIXED_TIME_STEP;
     let targetZ = trayBody.position.z + movement.z * FIXED_TIME_STEP;
     const targetY = trayBody.position.y + clampedYDelta;
+    const intendedVelocityX = movement.x;
+    const intendedVelocityY = clampedYDelta / FIXED_TIME_STEP;
+    const intendedVelocityZ = movement.z;
+    const intendedImpactSpeed = Math.hypot(intendedVelocityX, intendedVelocityY, intendedVelocityZ);
+    const impactTilt = Math.max(Math.abs(movement.roll), Math.abs(movement.pitch));
     const trayHalfX = trayHalfExtents.x;
     const trayHalfY = trayHalfExtents.y + trayWallHeight;
     const trayHalfZ = trayHalfExtents.z;
@@ -2106,6 +2183,20 @@ function updateTrayBody() {
         const overlapsZ = Math.abs(targetZ - obstacle.z) <= (trayHalfZ + obstacle.hz + OBSTACLE_COLLISION_PADDING);
 
         if (overlapsX && overlapsY && overlapsZ) {
+            const highImpact = intendedImpactSpeed >= DRONE_CRASH_IMPACT_SPEED;
+            const unstableImpact =
+                intendedImpactSpeed >= DRONE_CRASH_IMPACT_SPEED * 0.65 &&
+                impactTilt >= DRONE_CRASH_TILT_THRESHOLD;
+
+            if (highImpact || unstableImpact) {
+                crashDrone('Drone crashed: obstacle impact', {
+                    x: intendedVelocityX,
+                    y: intendedVelocityY,
+                    z: intendedVelocityZ,
+                });
+                return;
+            }
+
             targetX = trayBody.position.x;
             targetZ = trayBody.position.z;
             movement.x *= 0.18;
@@ -2274,28 +2365,52 @@ function animate() {
         return;
     }
 
-    updateInput();
-    handleGamepadToggles();
+    if (!droneCrashed) {
+        updateInput();
+        handleGamepadToggles();
+    }
     updateBallLocalState();
     updateWindImpulse();
     updateWindIndicator();
 
-    updateMovementState();
-    updateTrayBody();
+    if (!droneCrashed) {
+        updateMovementState();
+        updateTrayBody();
+    }
 
     world.step(FIXED_TIME_STEP);
 
     updateBallLocalState();
-    applyEdgeBounceAssist();
-    applyCenterLockAssist();
+    if (!droneCrashed) {
+        applyEdgeBounceAssist();
+        applyCenterLockAssist();
+    }
     updateBallLocalState();
 
-    if (isBallInsideTray()) {
-        outOfTrayTime = 0;
-        setOverlayVisible(false);
+    if (droneCrashed) {
+        crashElapsedTime += FIXED_TIME_STEP;
+
+        const traySpeed = Math.hypot(trayBody.velocity.x, trayBody.velocity.y, trayBody.velocity.z);
+        const hasHitGround = trayBody.position.y <= trayHalfExtents.y + 0.08;
+        const hasSettledLow = trayBody.position.y <= 0.35 && traySpeed <= DRONE_CRASH_SETTLE_SPEED;
+
+        if (!crashGameOverShown && crashElapsedTime >= DRONE_CRASH_GAME_OVER_DELAY && (hasHitGround || hasSettledLow)) {
+            setCrashOverlayMode(true);
+            setOverlayMessage('Drone crashed. Reset the simulation.');
+            setOverlayVisible(true);
+            crashGameOverShown = true;
+        }
     } else {
-        outOfTrayTime += FIXED_TIME_STEP;
-        setOverlayVisible(outOfTrayTime >= OUT_OF_TRAY_GRACE_TIME);
+        if (isBallInsideTray()) {
+            outOfTrayTime = 0;
+            setCrashOverlayMode(false);
+            setOverlayVisible(false);
+        } else {
+            outOfTrayTime += FIXED_TIME_STEP;
+            setCrashOverlayMode(false);
+            setOverlayMessage('The ball is out of the tray');
+            setOverlayVisible(outOfTrayTime >= OUT_OF_TRAY_GRACE_TIME);
+        }
     }
 
     syncVisuals();

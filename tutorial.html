@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Ball Balance Tutorial</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #070d16;
+            --panel: rgba(12, 20, 33, 0.94);
+            --panel-2: rgba(8, 14, 24, 0.98);
+            --text: #edf6ff;
+            --muted: #9eb3c6;
+            --accent: #75d8ff;
+            --accent-2: #ffd36f;
+            --border: rgba(153, 199, 235, 0.18);
+            --shadow: 0 18px 46px rgba(0, 0, 0, 0.34);
+            --radius: 20px;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(117, 216, 255, 0.12), transparent 36%),
+                radial-gradient(circle at top right, rgba(255, 211, 111, 0.1), transparent 30%),
+                linear-gradient(180deg, #04070d 0%, var(--bg) 44%, #050910 100%);
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image: linear-gradient(rgba(255, 255, 255, 0.022) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.022) 1px, transparent 1px);
+            background-size: 36px 36px;
+            opacity: 0.6;
+            mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.52), transparent 80%);
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .page {
+            position: relative;
+            z-index: 1;
+            max-width: 1440px;
+            margin: 0 auto;
+            padding: 28px;
+        }
+
+        .topbar,
+        .section,
+        .preview-shell,
+        .note,
+        .file-card {
+            border: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(15, 26, 41, 0.94), rgba(8, 13, 22, 0.97));
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(8px);
+        }
+
+        .topbar {
+            border-radius: 28px;
+            padding: 28px;
+            display: grid;
+            gap: 16px;
+            grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.8fr);
+            align-items: start;
+            margin-bottom: 20px;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border-radius: 999px;
+            padding: 6px 12px;
+            background: rgba(117, 216, 255, 0.12);
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            margin: 12px 0 10px;
+            font-size: clamp(2rem, 4vw, 4rem);
+            line-height: 1.02;
+            letter-spacing: -0.04em;
+        }
+
+        .lead {
+            margin: 0;
+            max-width: 74ch;
+            color: var(--muted);
+            font-size: 1.04rem;
+            line-height: 1.7;
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 18px;
+        }
+
+        .button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            border-radius: 14px;
+            border: 1px solid rgba(117, 216, 255, 0.28);
+            background: linear-gradient(180deg, rgba(117, 216, 255, 0.16), rgba(117, 216, 255, 0.08));
+            color: var(--text);
+            font-weight: 800;
+            padding: 11px 15px;
+        }
+
+        .button.secondary {
+            border-color: rgba(255, 211, 111, 0.28);
+            background: linear-gradient(180deg, rgba(255, 211, 111, 0.14), rgba(255, 211, 111, 0.06));
+        }
+
+        .meta {
+            display: grid;
+            gap: 12px;
+            align-content: start;
+        }
+
+        .meta h2,
+        .section h2,
+        .preview-header h2,
+        .file-card h3 {
+            margin: 0;
+            letter-spacing: -0.02em;
+        }
+
+        .meta-list,
+        .steps,
+        .controls-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .meta-list li,
+        .steps li,
+        .controls-list li {
+            padding: 7px 0;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        .meta-list strong,
+        .steps strong,
+        .controls-list strong {
+            color: var(--text);
+        }
+
+        .note {
+            border-radius: 18px;
+            padding: 14px;
+        }
+
+        .note p,
+        .section p,
+        .file-card p,
+        .small {
+            margin: 0;
+            color: var(--muted);
+            line-height: 1.65;
+        }
+
+        .content {
+            display: grid;
+            gap: 18px;
+        }
+
+        .section {
+            border-radius: 24px;
+            padding: 22px;
+        }
+
+        .section p {
+            max-width: 82ch;
+        }
+
+        .pill-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 14px;
+        }
+
+        .pill {
+            border-radius: 999px;
+            padding: 8px 12px;
+            border: 1px solid rgba(153, 199, 235, 0.2);
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text);
+            font-size: 0.92rem;
+        }
+
+        .file-grid {
+            display: grid;
+            gap: 14px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .file-card {
+            border-radius: 18px;
+            padding: 16px;
+        }
+
+        .file-card code,
+        .inline-code {
+            font-family: Consolas, "Courier New", monospace;
+            padding: 0.18em 0.42em;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.08);
+            color: #f5fbff;
+            font-size: 0.92em;
+        }
+
+        .preview-shell {
+            border-radius: 28px;
+            overflow: hidden;
+            margin-top: 18px;
+        }
+
+        .preview-header {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            gap: 14px;
+            align-items: center;
+            padding: 18px;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(16, 26, 41, 0.98), rgba(10, 16, 25, 0.98));
+        }
+
+        .preview-header p {
+            margin: 6px 0 0;
+        }
+
+        .mode-switcher {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .mode-switcher button,
+        .tour-buttons button {
+            border: 1px solid rgba(153, 199, 235, 0.22);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text);
+            border-radius: 999px;
+            padding: 9px 12px;
+            font-weight: 800;
+            cursor: pointer;
+        }
+
+        .mode-switcher button.active,
+        .tour-buttons button.active {
+            border-color: rgba(117, 216, 255, 0.48);
+            background: rgba(117, 216, 255, 0.14);
+        }
+
+        .preview-area {
+            position: relative;
+            height: min(78vh, 860px);
+            background: #02050a;
+        }
+
+        iframe {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            border: 0;
+            background: #000;
+        }
+
+        .overlay {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+
+        .spotlight-hole {
+            position: absolute;
+            background: transparent;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.72);
+            transition: all 120ms ease;
+        }
+
+        .callout {
+            display: none;
+        }
+
+        .connector {
+            display: none;
+        }
+
+        .tour-bar {
+            display: grid;
+            gap: 12px;
+            padding: 16px 18px 18px;
+            border-top: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(8, 14, 23, 0.92), rgba(6, 10, 16, 0.96));
+        }
+
+        .tour-buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .tour-buttons .nav {
+            min-width: 46px;
+            font-size: 1rem;
+        }
+
+        .tour-label {
+            color: var(--text);
+            font-weight: 800;
+        }
+
+        .tour-copy {
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        .footer {
+            margin: 18px 0 8px;
+            color: var(--muted);
+            font-size: 0.92rem;
+            line-height: 1.6;
+        }
+
+        @media (max-width: 1120px) {
+            .topbar {
+                grid-template-columns: 1fr;
+            }
+
+            .file-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .preview-area {
+                height: 70vh;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .page {
+                padding: 16px;
+            }
+
+            .topbar,
+            .section,
+            .preview-header,
+            .tour-bar,
+            .file-card,
+            .note {
+                border-radius: 20px;
+                padding: 18px;
+            }
+
+            .preview-area {
+                height: 66vh;
+            }
+
+        }
+
+        @media print {
+            body {
+                background: #fff;
+                color: #000;
+            }
+
+            body::before,
+            .actions,
+            .mode-switcher,
+            .tour-buttons,
+            .footer,
+            .connector,
+            .callout {
+                display: none !important;
+            }
+
+            .page {
+                max-width: none;
+                padding: 0;
+            }
+
+            .topbar,
+            .section,
+            .preview-shell,
+            .file-card,
+            .note {
+                box-shadow: none;
+                background: #fff;
+                color: #000;
+            }
+
+            .preview-area {
+                height: 60vh;
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <section class="topbar">
+            <div>
+                <span class="eyebrow">Tutorial and UI walkthrough</span>
+                <h1>Ball Balancer Drone documentation with a guided live preview</h1>
+                <p class="lead">
+                    This page explains the codebase, the interface, and the control flow in plain language.
+                    The live preview sits at the bottom of the page so the written tutorial stays easy to scan.
+                    Use the arrow buttons in the preview panel to step through each UI element one at a time.
+                </p>
+                <div class="actions">
+                    <a class="button" href="#preview">Jump to live preview</a>
+                    <a class="button secondary" href="README.md">Open README</a>
+                    <a class="button secondary" href="index.html">Desktop app</a>
+                    <a class="button secondary" href="mobile.html">Mobile app</a>
+                </div>
+            </div>
+
+            <aside class="meta">
+                <h2>How to use this page</h2>
+                <ul class="meta-list">
+                    <li><strong>1.</strong> Start the server with <span class="inline-code">npm start</span> or one of the launch scripts.</li>
+                    <li><strong>2.</strong> Open <span class="inline-code">tutorial.html</span> in the browser.</li>
+                    <li><strong>3.</strong> Use the arrow buttons in the preview to highlight each UI element.</li>
+                    <li><strong>4.</strong> Print the page to PDF when you are done.</li>
+                </ul>
+                <div class="note">
+                    <p>The preview is live. The PDF export captures the current preview state and the explanatory text on the page.</p>
+                </div>
+            </aside>
+        </section>
+
+        <section class="content">
+            <section class="section">
+                <h2>What the app does</h2>
+                <p>
+                    The project is a browser-based drone simulation. You control a drone, keep a ball balanced in a tray,
+                    and use assist features when the flight becomes unstable. The desktop layout focuses on telemetry and
+                    control hints. The mobile layout focuses on front-camera viewing and stereo FPV mode.
+                </p>
+                <div class="pill-row">
+                    <span class="pill">Drone flight simulation</span>
+                    <span class="pill">Ball-in-tray physics</span>
+                    <span class="pill">Desktop HUD</span>
+                    <span class="pill">Mobile FPV view</span>
+                    <span class="pill">Stereo VR mode</span>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>Project map</h2>
+                <div class="file-grid">
+                    <article class="file-card">
+                        <h3><code>index.html</code></h3>
+                        <p>Desktop entry page. It shows the front camera frame, the HUD, telemetry, and control hints.</p>
+                    </article>
+                    <article class="file-card">
+                        <h3><code>mobile.html</code></h3>
+                        <p>Mobile entry page. It keeps the front camera first and supports the stereo split layout.</p>
+                    </article>
+                    <article class="file-card">
+                        <h3><code>main.js</code></h3>
+                        <p>Main simulation loop, camera setup, HUD updates, assist logic, environment switching, and crash handling.</p>
+                    </article>
+                    <article class="file-card">
+                        <h3><code>drone.js</code></h3>
+                        <p>Builds the drone model and tray assembly used by the physics simulation.</p>
+                    </article>
+                    <article class="file-card">
+                        <h3><code>input.js</code></h3>
+                        <p>Handles keyboard and gamepad input, including the toggles for assist and environment mode.</p>
+                    </article>
+                    <article class="file-card">
+                        <h3><code>server.js</code></h3>
+                        <p>Static file server that serves the app on port <code>4173</code>.</p>
+                    </article>
+                    <article class="file-card">
+                        <h3><code>style.css</code></h3>
+                        <p>Styles the HUD, preview frame, overlays, and stereo mobile layout.</p>
+                    </article>
+                    <article class="file-card">
+                        <h3><code>Dockerfile</code> and scripts</h3>
+                        <p>Launch helpers for Docker, Windows, macOS, and Linux.</p>
+                    </article>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>How the interface works</h2>
+                <ol class="steps">
+                    <li><strong>Canvas world:</strong> Three.js renders the simulation while the UI floats over the scene.</li>
+                    <li><strong>Front camera frame:</strong> The small camera box in the corner mirrors the forward view.</li>
+                    <li><strong>Compass and telemetry:</strong> These panels report heading, altitude, speed, environment, tray state, and center status.</li>
+                    <li><strong>Control strip:</strong> Shows whether keyboard or gamepad input is active and lists the current hotkeys.</li>
+                    <li><strong>Debug HUD:</strong> F3 toggles the extended panel with full control instructions and extra telemetry values.</li>
+                    <li><strong>Overlay:</strong> When the ball leaves the tray or the drone crashes, the overlay appears with reset instructions.</li>
+                    <li><strong>Mobile stereo mode:</strong> On mobile, double tap toggles the split FPV layout for a VR-style view.</li>
+                </ol>
+            </section>
+
+            <section class="section">
+                <h2>Controls</h2>
+                <div class="file-grid">
+                    <article class="file-card">
+                        <h3>Windows and keyboard</h3>
+                        <ul class="controls-list">
+                            <li><strong>W / A / S / D:</strong> Move the drone.</li>
+                            <li><strong>Arrow keys:</strong> Pitch and roll.</li>
+                            <li><strong>B:</strong> Toggle auto-balance.</li>
+                            <li><strong>G:</strong> Toggle assisted mode.</li>
+                            <li><strong>T:</strong> Switch environment.</li>
+                            <li><strong>F3:</strong> Toggle debug HUD.</li>
+                        </ul>
+                    </article>
+                    <article class="file-card">
+                        <h3>Gamepad</h3>
+                        <ul class="controls-list">
+                            <li><strong>Left stick:</strong> Altitude and yaw.</li>
+                            <li><strong>Right stick:</strong> Pitch and roll.</li>
+                            <li><strong>Y:</strong> Toggle assisted mode.</li>
+                            <li><strong>X:</strong> Toggle environment.</li>
+                            <li><strong>B:</strong> Toggle auto-balance.</li>
+                        </ul>
+                    </article>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>Runtime flow</h2>
+                <ol class="steps">
+                    <li>Browser loads <code>index.html</code> or <code>mobile.html</code>.</li>
+                    <li><code>main.js</code> creates the Three.js scene and the Cannon physics world.</li>
+                    <li>Input is read every frame, then the drone and tray update based on the active mode.</li>
+                    <li>The HUD and overlays reflect the current state of the ball, tray, and environment.</li>
+                    <li>The renderer draws the scene and keeps the front camera and mobile view in sync.</li>
+                </ol>
+            </section>
+
+            <section class="section">
+                <h2>Exporting a PDF</h2>
+                <p>
+                    Open this page in a browser, choose the preview mode you want, step through any UI highlights you need,
+                    and then print the page to PDF. The export will capture the written tutorial and the live preview frame.
+                </p>
+            </section>
+        </section>
+
+        <section class="preview-shell" id="preview">
+            <div class="preview-header">
+                <div>
+                    <h2>Live preview at the bottom</h2>
+                    <p class="small">Use the arrow buttons below to highlight one UI element at a time.</p>
+                </div>
+                <div class="mode-switcher" aria-label="Preview mode">
+                    <button type="button" class="active" data-mode="desktop">Desktop</button>
+                    <button type="button" data-mode="mobile">Mobile</button>
+                    <button type="button" data-mode="refresh">Refresh</button>
+                </div>
+            </div>
+            <div class="preview-area">
+                <iframe id="preview-frame" title="Live app preview" src="index.html"></iframe>
+                <div class="overlay" id="overlay-layer" aria-hidden="true"></div>
+            </div>
+            <div class="tour-bar">
+                <div class="tour-buttons">
+                    <button type="button" class="nav" id="prev-step" aria-label="Previous highlight">←</button>
+                    <button type="button" class="nav" id="next-step" aria-label="Next highlight">→</button>
+                    <button type="button" id="toggle-autoplay">Autoplay</button>
+                    <span class="tour-label" id="tour-label">Loading preview…</span>
+                </div>
+                <div class="tour-copy" id="tour-copy">The preview will load the app and start highlighting the interface.</div>
+            </div>
+        </section>
+
+        <p class="footer">
+            Tip: this page depends on the local server. Start the project first, then open <a href="tutorial.html">tutorial.html</a>.
+        </p>
+    </main>
+
+    <script>
+        const frame = document.getElementById('preview-frame');
+        const modeButtons = Array.from(document.querySelectorAll('.mode-switcher button'));
+        const prevStepButton = document.getElementById('prev-step');
+        const nextStepButton = document.getElementById('next-step');
+        const autoplayButton = document.getElementById('toggle-autoplay');
+        const tourLabel = document.getElementById('tour-label');
+        const tourCopy = document.getElementById('tour-copy');
+
+        const targetSpecs = {
+            desktop: [
+                { selector: '#mini-cam-frame', label: 'Front camera', text: 'A small forward-facing view that helps you orient the drone.' },
+                { selector: '#compass', label: 'Compass', text: 'Shows the current heading and the direction of rotation.' },
+                { selector: '#game-telemetry', label: 'Telemetry', text: 'Shows altitude, speed, tray state, ball position, and center status.' },
+                { selector: '#control-glyphs', label: 'Control strip', text: 'Shows whether keyboard or gamepad input is active and lists the key hints.' },
+                { 
+                    selector: '#debug-hud', 
+                    label: 'Debug HUD', 
+                    text: 'The extended panel toggled by F3 with full controls and detailed telemetry.',
+                    setup: (doc) => {
+                        const el = doc.getElementById('debug-hud');
+                        if (el) {
+                            el.classList.remove('hidden');
+                            el.classList.add('visible');
+                        }
+
+                        const toast = doc.createElement('div');
+                        toast.textContent = '[ F3 pressed ]';
+                        toast.style.cssText = 'position:fixed;top:40%;left:50%;transform:translate(-50%,-50%) scale(1.5);background:rgba(255, 211, 111, 0.95);color:#000;padding:12px 24px;border-radius:12px;font-weight:900;font-size:24px;font-family:system-ui,sans-serif;opacity:0;transition:all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);z-index:999999;box-shadow:0 10px 30px rgba(0,0,0,0.5);pointer-events:none;';
+                        doc.body.appendChild(toast);
+                        
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => {
+                                toast.style.opacity = '1';
+                                toast.style.transform = 'translate(-50%,-50%) scale(1)';
+                                setTimeout(() => {
+                                    toast.style.opacity = '0';
+                                    toast.style.transform = 'translate(-50%,-50%) scale(0.9)';
+                                    setTimeout(() => toast.remove(), 300);
+                                }, 1200);
+                            });
+                        });
+                    },
+                    teardown: (doc) => {
+                        const el = doc.getElementById('debug-hud');
+                        if (el) {
+                            el.classList.remove('visible');
+                            el.classList.add('hidden');
+                        }
+                    }
+                },
+                { 
+                    selector: '#overlay', 
+                    label: 'Reset overlay', 
+                    text: 'Appears when the tray is out of balance or the drone crashes.',
+                    setup: (doc) => {
+                        const el = doc.getElementById('overlay');
+                        const h2 = el ? el.querySelector('h2') : null;
+                        
+                        const toast = doc.createElement('div');
+                        toast.textContent = '[ Ball bounds off ]';
+                        toast.style.cssText = 'position:fixed;top:30%;left:50%;transform:translate(-50%,-50%);color:#ff7575;padding:10px 20px;font-weight:900;font-size:22px;font-family:system-ui,sans-serif;opacity:0;transition:all 0.4s ease;z-index:999999;pointer-events:none;background:rgba(0,0,0,0.8);border:2px solid #ff7575;border-radius:12px;';
+                        doc.body.appendChild(toast);
+
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => {
+                                toast.style.opacity = '1';
+                                toast.style.transform = 'translate(-50%, 0)';
+                                
+                                setTimeout(() => {
+                                    if (el) {
+                                        el.classList.remove('hidden');
+                                        el.classList.add('crash-mode');
+                                    }
+                                    if (h2) h2.textContent = 'Drone crashed. Reset the simulation.';
+                                    toast.textContent = 'Triggering reset state...';
+                                    
+                                    setTimeout(() => {
+                                        toast.style.opacity = '0';
+                                        setTimeout(() => toast.remove(), 400);
+                                    }, 800);
+                                }, 900);
+                            });
+                        });
+                    },
+                    teardown: (doc) => {
+                        const el = doc.getElementById('overlay');
+                        if (el) {
+                            el.classList.add('hidden');
+                            el.classList.remove('crash-mode');
+                        }
+                    }
+                },
+            ],
+            mobile: [
+                { selector: '#compass', label: 'Compass', text: 'Heading strip at the top of the screen.' },
+                { selector: '#game-telemetry', label: 'Telemetry', text: 'Compact status panel for the mobile layout.' },
+                { selector: '#control-glyphs', label: 'Control strip', text: 'Shows touch, keyboard, or gamepad hints.' },
+                { selector: '#fpv-divider', label: 'Stereo divider', text: 'Visible when stereo FPV mode is active.' },
+                { selector: '#vr-mask', label: 'VR mask', text: 'Creates the mobile stereo framing effect.' },
+                { 
+                    selector: '#overlay', 
+                    label: 'Reset overlay', 
+                    text: 'Used when the tray leaves the safe range or the drone crashes.',
+                    setup: (doc) => {
+                        const el = doc.getElementById('overlay');
+                        const h2 = el ? el.querySelector('h2') : null;
+                        
+                        const toast = doc.createElement('div');
+                        toast.textContent = '[ Ball bounds off ]';
+                        toast.style.cssText = 'position:fixed;top:30%;left:50%;transform:translate(-50%,-50%);color:#ff7575;padding:10px 20px;font-weight:900;font-size:22px;font-family:system-ui,sans-serif;opacity:0;transition:all 0.4s ease;z-index:999999;pointer-events:none;background:rgba(0,0,0,0.8);border:2px solid #ff7575;border-radius:12px;';
+                        doc.body.appendChild(toast);
+
+                        requestAnimationFrame(() => {
+                            requestAnimationFrame(() => {
+                                toast.style.opacity = '1';
+                                toast.style.transform = 'translate(-50%, 0)';
+                                
+                                setTimeout(() => {
+                                    if (el) {
+                                        el.classList.remove('hidden');
+                                        el.classList.add('crash-mode');
+                                    }
+                                    if (h2) h2.textContent = 'Drone crashed. Reset the simulation.';
+                                    toast.textContent = 'Triggering reset state...';
+                                    
+                                    setTimeout(() => {
+                                        toast.style.opacity = '0';
+                                        setTimeout(() => toast.remove(), 400);
+                                    }, 800);
+                                }, 900);
+                            });
+                        });
+                    },
+                    teardown: (doc) => {
+                        const el = doc.getElementById('overlay');
+                        if (el) {
+                            el.classList.add('hidden');
+                            el.classList.remove('crash-mode');
+                        }
+                    }
+                },
+            ],
+        };
+
+        let mode = 'desktop';
+        let currentStep = 0;
+        let lastStep = -1;
+        let autoplay = false;
+        let renderToken = null;
+        let autoplayTimer = null;
+
+        function setActiveButton(buttons, activeValue) {
+            buttons.forEach((button) => {
+                button.classList.toggle('active', button.dataset.mode === activeValue);
+            });
+        }
+
+        function loadMode(nextMode) {
+            mode = nextMode;
+            frame.src = nextMode === 'mobile' ? 'mobile.html' : 'index.html';
+            currentStep = 0;
+            setActiveButton(modeButtons, mode);
+            updateTourText();
+        }
+
+        function createNode(tagName, className) {
+            const node = document.createElement(tagName);
+            node.className = className;
+            return node;
+        }
+
+        function getOverlayLayer(doc) {
+            let layer = doc.getElementById('tutorial-overlay-layer');
+            if (layer) {
+                return layer;
+            }
+
+            layer = doc.createElement('div');
+            layer.id = 'tutorial-overlay-layer';
+            layer.style.position = 'fixed';
+            layer.style.inset = '0';
+            layer.style.pointerEvents = 'none';
+            layer.style.zIndex = '2147483647';
+            layer.style.overflow = 'hidden';
+            doc.body.appendChild(layer);
+            return layer;
+        }
+
+        function getSpecs() {
+            return targetSpecs[mode];
+        }
+
+        function clampStep(step) {
+            const specs = getSpecs();
+            if (!specs.length) {
+                return 0;
+            }
+            return (step + specs.length) % specs.length;
+        }
+
+        function updateTourText() {
+            const specs = getSpecs();
+            const current = specs[currentStep];
+            if (!current) {
+                tourLabel.textContent = 'Waiting for preview';
+                tourCopy.textContent = 'No highlight target is available yet.';
+                return;
+            }
+
+            tourLabel.textContent = `${currentStep + 1} / ${specs.length}: ${current.label}`;
+            tourCopy.textContent = current.text;
+        }
+
+        function scheduleRender() {
+            if (!renderToken) {
+                renderToken = requestAnimationFrame(renderHighlights);
+            }
+        }
+
+        function renderHighlights() {
+            renderToken = requestAnimationFrame(renderHighlights);
+
+            const doc = frame.contentDocument;
+            if (!doc || !doc.body) {
+                return;
+            }
+
+            const overlay = getOverlayLayer(doc);
+
+            const specs = getSpecs();
+            const current = specs[currentStep];
+            if (!current) {
+                overlay.style.display = 'none';
+                return;
+            }
+
+            const element = doc.querySelector(current.selector);
+            if (!element) {
+                overlay.style.display = 'none';
+                updateTourText();
+                return;
+            }
+
+            const rect = element.getBoundingClientRect();
+            if (rect.width < 2 || rect.height < 2) {
+                overlay.style.display = 'none';
+                updateTourText();
+                return;
+            }
+
+            overlay.style.display = 'block';
+
+            let hole = overlay.querySelector('.spotlight-hole');
+            if (!hole) {
+                overlay.innerHTML = '';
+                hole = doc.createElement('div');
+                hole.className = 'spotlight-hole';
+                hole.style.position = 'absolute';
+                hole.style.boxShadow = '0 0 0 9999px rgba(0, 0, 0, 0.82)';
+                hole.style.transition = 'all 150ms ease';
+                hole.style.pointerEvents = 'none';
+                overlay.appendChild(hole);
+            }
+
+            hole.style.left = `${rect.left}px`;
+            hole.style.top = `${rect.top}px`;
+            hole.style.width = `${rect.width}px`;
+            hole.style.height = `${rect.height}px`;
+            hole.style.borderRadius = `${Math.min(18, Math.max(8, Math.min(rect.width, rect.height) * 0.08))}px`;
+
+            // updateTourText(); // Only need to update when moving steps, not every frame
+        }
+
+        function goToStep(nextStep) {
+            const specs = getSpecs();
+            if (!specs.length) {
+                return;
+            }
+
+            const doc = frame.contentDocument;
+
+            if (lastStep !== -1 && specs[lastStep]?.teardown && doc) {
+                specs[lastStep].teardown(doc);
+            }
+
+            currentStep = clampStep(nextStep);
+            
+            if (specs[currentStep]?.setup && doc) {
+                specs[currentStep].setup(doc);
+            }
+
+            lastStep = currentStep;
+
+            updateTourText();
+            scheduleRender();
+        }
+
+        function stopAutoplay() {
+            autoplay = false;
+            autoplayButton.textContent = 'Autoplay';
+            if (autoplayTimer) {
+                clearInterval(autoplayTimer);
+                autoplayTimer = null;
+            }
+        }
+
+        function toggleAutoplay() {
+            autoplay = !autoplay;
+            autoplayButton.textContent = autoplay ? 'Pause' : 'Autoplay';
+
+            if (autoplay) {
+                autoplayTimer = setInterval(() => {
+                    goToStep(currentStep + 1);
+                }, 2400);
+            } else {
+                stopAutoplay();
+            }
+        }
+
+        modeButtons.forEach((button) => {
+            button.addEventListener('click', () => {
+                if (button.dataset.mode === 'refresh') {
+                    frame.src = mode === 'mobile' ? 'mobile.html' : 'index.html';
+                    return;
+                }
+
+                stopAutoplay();
+                loadMode(button.dataset.mode);
+            });
+        });
+
+        prevStepButton.addEventListener('click', () => {
+            stopAutoplay();
+            goToStep(currentStep - 1);
+        });
+
+        nextStepButton.addEventListener('click', () => {
+            stopAutoplay();
+            goToStep(currentStep + 1);
+        });
+
+        autoplayButton.addEventListener('click', toggleAutoplay);
+
+        frame.addEventListener('load', () => {
+            scheduleRender();
+
+            const doc = frame.contentDocument;
+            if (!doc) {
+                return;
+            }
+
+            doc.addEventListener('click', scheduleRender, true);
+            doc.defaultView?.addEventListener('resize', scheduleRender);
+            window.addEventListener('resize', scheduleRender);
+            setTimeout(scheduleRender, 120);
+            setTimeout(scheduleRender, 700);
+        });
+
+        window.addEventListener('resize', scheduleRender);
+        loadMode('desktop');
+    </script>
+</body>
+</html>

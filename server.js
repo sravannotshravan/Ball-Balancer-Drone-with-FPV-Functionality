@@ -81,5 +81,5 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
-    console.log(`Serving ${__dirname} on http://${HOST}:${PORT}`);
+    console.log(`Serving ${__dirname} on http://localhost:${PORT}`);
 });

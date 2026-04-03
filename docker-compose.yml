@@ -1,0 +1,12 @@
+services:
+  app:
+    build:
+      context: .
+    container_name: drones-project-gemini
+    environment:
+      HOST: 0.0.0.0
+      PORT: 4173
+      NODE_ENV: production
+    ports:
+      - "4173:4173"
+    restart: unless-stopped
