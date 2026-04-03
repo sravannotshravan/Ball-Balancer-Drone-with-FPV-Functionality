@@ -1878,8 +1878,8 @@ function updateMovementState() {
     targetMovement.y = input.throttle * VERTICAL_SPEED;
     targetMovement.yawRate = input.yaw * YAW_SPEED * (assistedMode ? 0.8 : 1);
 
-    const stabilizeX = -(ballLocalPosition.x * ASSIST_STABILIZE_P + ballLocalVelocity.x * ASSIST_STABILIZE_D);
-    const stabilizeZ = ballLocalPosition.z * ASSIST_STABILIZE_P + ballLocalVelocity.z * ASSIST_STABILIZE_D;
+    const stabilizeX = ballLocalPosition.x;
+    const stabilizeZ = ballLocalPosition.z;
     const edgeDanger = THREE.MathUtils.clamp((edgeRatio - 0.35) / 0.45, 0, 1);
     const planarBallSpeed = Math.hypot(ballLocalVelocity.x, ballLocalVelocity.z);
     const inCenterRegion = isBallInCenterRegion(centerRegionHalf);
@@ -1911,102 +1911,25 @@ function updateMovementState() {
         centerHoldActive = false;
     }
 
-    if (autoBalance) {
+    if (autoBalance || assistedMode) {
+        // Adjust pitch and roll directly relative to ball's local position
+        const pGain = 1.25;
+        const dGain = 0.5;
+        
+        let desiredRoll = ballLocalPosition.x * pGain + ballLocalVelocity.x * dGain;
+        let desiredPitch = -ballLocalPosition.z * pGain - ballLocalVelocity.z * dGain;
+        
         if (forwardStickOverride) {
-            targetMovement.roll = 0;
-            targetMovement.pitch = THREE.MathUtils.clamp(-effectivePitchInput * TILT_LIMIT * 0.82, -TILT_LIMIT, TILT_LIMIT);
-        } else
-        if (pilotPlanarNeutral) {
-            targetMovement.roll = THREE.MathUtils.clamp(stabilizeX, -TILT_LIMIT, TILT_LIMIT);
-            targetMovement.pitch = THREE.MathUtils.clamp(-stabilizeZ, -TILT_LIMIT, TILT_LIMIT);
-        } else {
-            const stickRoll = effectiveRollInput * TILT_LIMIT * 0.78;
-            const stickPitch = -effectivePitchInput * TILT_LIMIT * 0.78;
-            const safetyInfluence = THREE.MathUtils.clamp((edgeRatio - EDGE_RESCUE_START) / (1 - EDGE_RESCUE_START), 0, 1);
-            const safetyRoll = THREE.MathUtils.clamp(stabilizeX, -TILT_LIMIT * 0.82, TILT_LIMIT * 0.82);
-            const safetyPitch = THREE.MathUtils.clamp(-stabilizeZ, -TILT_LIMIT * 0.82, TILT_LIMIT * 0.82);
-
-            targetMovement.roll = THREE.MathUtils.lerp(stickRoll, safetyRoll, safetyInfluence);
-            targetMovement.pitch = THREE.MathUtils.lerp(stickPitch, safetyPitch, safetyInfluence);
+            desiredRoll = 0;
+            desiredPitch = THREE.MathUtils.clamp(-effectivePitchInput * TILT_LIMIT * 0.82, -TILT_LIMIT, TILT_LIMIT);
         }
-    } else if (assistedMode) {
-        if (!pilotPlanarNeutral) {
-            assistPulseTilt.roll = 0;
-            assistPulseTilt.pitch = 0;
-            assistPulseCycle.rollOn = false;
-            assistPulseCycle.pitchOn = false;
-            assistPulseCycle.rollTimer = 0;
-            assistPulseCycle.pitchTimer = 0;
-
-            targetMovement.roll = forwardStickOverride ? 0 : THREE.MathUtils.clamp(effectiveRollInput * TILT_LIMIT * 0.78, -TILT_LIMIT, TILT_LIMIT);
-            targetMovement.pitch = THREE.MathUtils.clamp(-effectivePitchInput * TILT_LIMIT * 0.78, -TILT_LIMIT, TILT_LIMIT);
-        } else if (inCenterRegion) {
+        
+        targetMovement.roll = THREE.MathUtils.clamp(desiredRoll + effectiveRollInput * 0.5, -TILT_LIMIT, TILT_LIMIT);
+        targetMovement.pitch = THREE.MathUtils.clamp(desiredPitch - effectivePitchInput * 0.5, -TILT_LIMIT, TILT_LIMIT);
+        
+        if (shouldAutoLevel) {
             targetMovement.roll = 0;
             targetMovement.pitch = 0;
-            assistPulseTilt.roll *= ASSIST_PULSE_DAMP;
-            assistPulseTilt.pitch *= ASSIST_PULSE_DAMP;
-            assistPulseCycle.rollOn = false;
-            assistPulseCycle.pitchOn = false;
-            assistPulseCycle.rollTimer = 0;
-            assistPulseCycle.pitchTimer = 0;
-        } else {
-            assistPulseCycle.rollOn = false;
-            assistPulseCycle.pitchOn = false;
-            assistPulseCycle.rollTimer = 0;
-            assistPulseCycle.pitchTimer = 0;
-            assistPulseTilt.roll = 0;
-            assistPulseTilt.pitch = 0;
-
-            // Drive roll and pitch directly from ball local X/Z so centering is deliberate and visible.
-            // User-requested simple mapping:
-            // ballLocalX < 0 -> roll < 0
-            // ballLocalZ < 0 -> pitch > 0
-            const radialDistance = Math.hypot(ballLocalPosition.x, ballLocalPosition.z);
-            let filteredLocalVelX = ballLocalVelocity.x;
-            let filteredLocalVelZ = ballLocalVelocity.z;
-
-            if (radialDistance > ASSIST_SWIRL_MIN_RADIUS) {
-                const tangentX = -ballLocalPosition.z / radialDistance;
-                const tangentZ = ballLocalPosition.x / radialDistance;
-                const tangentialSpeed =
-                    ballLocalVelocity.x * tangentX +
-                    ballLocalVelocity.z * tangentZ;
-
-                filteredLocalVelX -= tangentX * tangentialSpeed * ASSIST_SWIRL_DAMPING;
-                filteredLocalVelZ -= tangentZ * tangentialSpeed * ASSIST_SWIRL_DAMPING;
-            }
-
-            let localRollCorrection = computeDeliberateCenterTilt(ballLocalPosition.x, filteredLocalVelX, edgeDanger);
-            let localPitchCorrection = computeDeliberateCenterTilt(-ballLocalPosition.z, -filteredLocalVelZ, edgeDanger);
-
-            // In corner states, prioritize the dominant axis to avoid corner-to-corner ping-pong.
-            if (edgeRatio > 0.82) {
-                if (Math.abs(ballLocalPosition.x) > Math.abs(ballLocalPosition.z)) {
-                    localPitchCorrection *= 0.4;
-                } else {
-                    localRollCorrection *= 0.4;
-                }
-            }
-
-            let baseRoll = localRollCorrection + effectiveRollInput * ASSIST_STICK_BLEND;
-            let basePitch = localPitchCorrection + effectivePitchInput * ASSIST_STICK_BLEND;
-
-            if (forwardStickOverride) {
-                baseRoll = 0;
-            }
-
-            if (edgeRatio > ASSIST_EDGE_EMERGENCY_RATIO) {
-                baseRoll = THREE.MathUtils.clamp(baseRoll, -ASSIST_EDGE_EMERGENCY_TILT, ASSIST_EDGE_EMERGENCY_TILT);
-                basePitch = THREE.MathUtils.clamp(basePitch, -ASSIST_EDGE_EMERGENCY_TILT, ASSIST_EDGE_EMERGENCY_TILT);
-            }
-
-            if (shouldAutoLevel) {
-                targetMovement.roll = 0;
-                targetMovement.pitch = 0;
-            } else {
-                targetMovement.roll = THREE.MathUtils.clamp(baseRoll, -TILT_LIMIT, TILT_LIMIT);
-                targetMovement.pitch = THREE.MathUtils.clamp(basePitch, -TILT_LIMIT, TILT_LIMIT);
-            }
         }
     } else {
         if (rightStickNeutral) {
