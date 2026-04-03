@@ -586,6 +586,7 @@ let centerRegionRatio = CENTER_REGION_RATIO_DEFAULT;
 let centerHoldActive = false;
 let edgeBounceCooldown = 0;
 let debugHudVisible = false;
+let mapHudVisible = false;
 let autonomousNavigationEnabled = false;
 const autonomousWaypoints = [
     new THREE.Vector3(0, 15, -40),
@@ -831,6 +832,17 @@ window.addEventListener('keydown', (event) => {
     if (event.code === 'KeyT') {
         toggleEnvironmentMode();
     }
+    if (event.code === 'KeyM') {
+        event.preventDefault();
+        mapHudVisible = !mapHudVisible;
+        const mapHud = document.getElementById('map-hud');
+        if (mapHud) mapHud.classList.toggle('hidden', !mapHudVisible);
+        
+        // Hide game hud when either debug or map is open
+        if (gameHud) gameHud.classList.toggle('hidden', debugHudVisible || mapHudVisible);
+
+        if (mapHudVisible) drawNavMap(); // Initial draw 
+    }
     if (event.code === 'F3') {
         event.preventDefault();
         debugHudVisible = !debugHudVisible;
@@ -838,7 +850,7 @@ window.addEventListener('keydown', (event) => {
             debugHud.classList.toggle('hidden', !debugHudVisible);
         }
         if (gameHud) {
-            gameHud.classList.toggle('hidden', debugHudVisible);
+            gameHud.classList.toggle('hidden', debugHudVisible || mapHudVisible);
         }
     }
 });
@@ -2465,4 +2477,158 @@ window.addEventListener('resize', () => {
         renderMiniCameraView();
     }
 });
+
+function drawNavMap() {
+    const canvas = document.getElementById('nav-map-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    
+    // Config values
+    const mapSize = 400; // Map size from CSS canvas size
+    const worldExtents = 150; // Max coordinate offset we want to see (meters from center)
+    const scale = mapSize / (worldExtents * 2);
+    const centerMap = mapSize / 2;
+    
+    // Clear canvas
+    ctx.clearRect(0, 0, mapSize, mapSize);
+    
+    // Draw background
+    ctx.fillStyle = '#0a0a0a';
+    ctx.fillRect(0, 0, mapSize, mapSize);
+    
+    // Function to translate 3D world coord to 2D canvas coord
+    const worldToMap = (val) => centerMap + (val * scale);
+
+    // Grid lines - draw very faintly
+    ctx.strokeStyle = '#222';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = -worldExtents; i <= worldExtents; i += 50) {
+        let mapped = worldToMap(i);
+        // Vertical line
+        ctx.moveTo(mapped, 0); ctx.lineTo(mapped, mapSize);
+        // Horizontal line
+        ctx.moveTo(0, mapped); ctx.lineTo(mapSize, mapped);
+    }
+    ctx.stroke();
+
+    // Draw origin axes tighter
+    ctx.strokeStyle = '#444';
+    ctx.beginPath();
+    ctx.moveTo(centerMap, 0); ctx.lineTo(centerMap, mapSize);
+    ctx.moveTo(0, centerMap); ctx.lineTo(mapSize, centerMap);
+    ctx.stroke();
+
+    // Draw active obstacles
+    ctx.fillStyle = 'rgba(255, 100, 100, 0.5)';
+    ctx.strokeStyle = '#ff0000';
+    ctx.lineWidth = 1;
+    if (activeObstacleColliders) {
+        for (let i = 0; i < activeObstacleColliders.length; i++) {
+            const collider = activeObstacleColliders[i];
+            const w = collider.hx * 2 * scale;
+            const h = collider.hz * 2 * scale;
+            const x = worldToMap(collider.x - collider.hx);
+            const z = worldToMap(collider.z - collider.hz);
+            
+            ctx.fillRect(x, z, w, h);
+            ctx.strokeRect(x, z, w, h);
+        }
+    }
+
+    // Draw current autonomous waypoints
+    if (autonomousWaypoints && autonomousWaypoints.length > 0) {
+        const dest = autonomousWaypoints[currentWaypointIndex];
+        
+        ctx.beginPath();
+        const mapTargetX = worldToMap(dest.x);
+        const mapTargetZ = worldToMap(dest.z);
+        
+        ctx.arc(mapTargetX, mapTargetZ, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = '#00ffaa';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        // Target crosshair
+        ctx.beginPath();
+        ctx.moveTo(mapTargetX - 10, mapTargetZ); ctx.lineTo(mapTargetX + 10, mapTargetZ);
+        ctx.moveTo(mapTargetX, mapTargetZ - 10); ctx.lineTo(mapTargetX, mapTargetZ + 10);
+        ctx.stroke();
+    }
+    
+    // Draw drone position
+    if (dronePosition) {
+        const dx = worldToMap(dronePosition.x);
+        const dz = worldToMap(dronePosition.z);
+        
+        // Render drone blip
+        ctx.beginPath();
+        ctx.arc(dx, dz, 4, 0, 2 * Math.PI);
+        ctx.fillStyle = '#4488ff';
+        ctx.fill();
+        ctx.strokeStyle = '#aaccff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Draw drone heading indicator (droneHeading is yaw)
+        // droneHeading 0 is +Z in three.js, rotation is around Y axis
+        // Positive rotation is CCW from top-down
+        const lineLen = 12;
+        ctx.beginPath();
+        ctx.moveTo(dx, dz);
+        // Canvas Y is +Z
+        const dirX = Math.sin(droneHeading);
+        const dirZ = Math.cos(droneHeading);
+        ctx.lineTo(dx + dirX * lineLen, dz + dirZ * lineLen);
+        ctx.strokeStyle = '#ffffff';
+        ctx.stroke();
+    }
+
+    // Queue next frame if map is visible
+    if (mapHudVisible) {
+        requestAnimationFrame(drawNavMap);
+    }
+}
+
+// Map Click Handler 
+function setupMapClick() {
+    const canvas = document.getElementById('nav-map-canvas');
+    if (!canvas) return;
+    
+    canvas.addEventListener('mousedown', (event) => {
+        if (!mapHudVisible) return;
+        
+        const rect = canvas.getBoundingClientRect();
+        // Get click coordinate relative to canvas bounds
+        const mapX = event.clientX - rect.left;
+        const mapY = event.clientY - rect.top;
+        
+        // Reverse-map config (must match drawNavMap)
+        const mapSize = 400; 
+        const worldExtents = 150; 
+        const scale = (mapSize) / (worldExtents * 2);
+        const centerMap = mapSize / 2;
+        
+        // Map 2D coordinate to 3D world coordinate
+        const worldX = (mapX - centerMap) / scale;
+        const worldZ = (mapY - centerMap) / scale;
+        
+        // Enable autonomous mode if disabled
+        autonomousNavigationEnabled = true;
+        
+        const destHeight = dronePosition ? Math.max(15, dronePosition.y) : 15;
+        
+        // Overwrite waypoints
+        autonomousWaypoints.length = 0; // clear array
+        autonomousWaypoints.push(new THREE.Vector3(worldX, destHeight, worldZ));
+        currentWaypointIndex = 0;
+        
+        // Provide hint output
+        console.log(`Navigating to X: ${worldX.toFixed(1)}, Z: ${worldZ.toFixed(1)}`);
+    });
+}
+setupMapClick();
+
 

@@ -42,6 +42,7 @@
                 <span class="glyph">G Assist</span>
                 <span class="glyph">T Env</span>
                 <span class="glyph">N Nav</span>
+                <span class="glyph">M Map</span>
             </div>
             <div id="gamepad-glyphs" class="glyph-layout hidden">
                 <span class="glyph">LS ↑↓ Alt</span>
@@ -52,6 +53,17 @@
                 <span class="glyph">Y Assist</span>
                 <span class="glyph">X Env</span>
             </div>
+        </section>
+    </div>
+    <div id="map-hud" class="hidden">
+        <section class="panel map-panel">
+            <h2>Tactical Map</h2>
+            <canvas id="nav-map-canvas" width="400" height="400" style="background: #0d141e; border-radius: 8px; cursor: crosshair;"></canvas>
+            <div class="row">
+                <span>Waypoint Target</span>
+                <span id="nav-status">NONE</span>
+            </div>
+            <p style="color: #9eb3c6; font-size: 13px; margin-top: 8px;">Click anywhere on the map to set a new destination for the drone.</p>
         </section>
     </div>
     <div id="debug-hud" class="hidden">
@@ -70,6 +82,7 @@
                 <li>G: Toggle assisted mode</li>
                 <li>T: Toggle city / mountain plains</li>
                 <li>N: Toggle autonomous navigation</li>
+                <li>M: Toggle Navigation Map</li>
                 <li>F3: Toggle debug HUD</li>
             </ul>
             <div class="center-config">

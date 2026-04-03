@@ -333,7 +333,8 @@ body.stereo-fpv #debug-hud {
     transform-origin: top left;
 }
 
-#debug-hud {
+#debug-hud,
+#map-hud {
     position: fixed;
     top: 16px;
     left: 16px;
@@ -343,7 +344,8 @@ body.stereo-fpv #debug-hud {
     pointer-events: auto;
 }
 
-#debug-hud * {
+#debug-hud *,
+#map-hud * {
     pointer-events: auto;
 }
 
