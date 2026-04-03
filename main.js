@@ -1840,18 +1840,56 @@ function updateAutonomousNavigation() {
         return;
     }
 
-    const angleToTarget = Math.atan2(-dx, -dz);
+    const currentPos = droneBody.position;
+    
+    // Attractive force toward target
+    let forceX = dx;
+    let forceZ = dz;
+    const distToTarget = Math.sqrt(distanceSq);
+
+    if (distToTarget > 0) {
+        forceX /= distToTarget;
+        forceZ /= distToTarget;
+    }
+
+    // Repulsive forces from obstacles (Artificial Potential Field)
+    const safeDistance = 14; 
+    for (let i = 0; i < activeObstacleColliders.length; i++) {
+        const obs = activeObstacleColliders[i];
+        
+        // Closest point on obstacle AABB to drone
+        const closeX = THREE.MathUtils.clamp(currentPos.x, obs.x - obs.hx, obs.x + obs.hx);
+        const closeZ = THREE.MathUtils.clamp(currentPos.z, obs.z - obs.hz, obs.z + obs.hz);
+        
+        const distToObsX = currentPos.x - closeX;
+        const distToObsZ = currentPos.z - closeZ;
+        
+        const distToObsSq = distToObsX * distToObsX + distToObsZ * distToObsZ;
+        
+        if (distToObsSq < safeDistance * safeDistance && distToObsSq > 0.001) {
+            const distToObs = Math.sqrt(distToObsSq);
+            // Repulsion strength grows aggressively as we get closer
+            const repulsion = 1.0 * Math.pow((safeDistance - distToObs) / safeDistance, 2);
+            forceX += (distToObsX / distToObs) * repulsion * 2.5; // Multiply to overcome attraction
+            forceZ += (distToObsZ / distToObs) * repulsion * 2.5;
+        }
+    }
+
+    const angleToTarget = Math.atan2(-forceX, -forceZ);
     let diff = angleToTarget - movement.yaw;
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
 
-    const turnScale = 1.2;
+    const turnScale = 1.5;
     input.autonomousTurnAmount = THREE.MathUtils.clamp(diff * turnScale, -1, 1);
     
+    // Fly slower if having to make a sharp turn due to obstacle avoidance
     if (Math.abs(diff) < 0.4) {
-        input.autonomousPitchAmount = 0.5; // Pitch forward (positive pitch flies forward)
-    } else {
+        input.autonomousPitchAmount = 0.45;
+    } else if (Math.abs(diff) < 1.0) {
         input.autonomousPitchAmount = 0.15;
+    } else {
+        input.autonomousPitchAmount = 0.0;
     }
 }
 
